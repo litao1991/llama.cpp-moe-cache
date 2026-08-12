@@ -36,6 +36,7 @@ static void test_frequency_admission() {
     assert(stats.accesses == 3);
     assert(stats.hits == 1);
     assert(stats.misses == 2);
+    assert(stats.admission_attempts == 1);
     assert(stats.admissions == 1);
     assert(stats.evictions == 0);
 }
@@ -125,11 +126,58 @@ static void test_slot_alignment_and_coalescing() {
     assert(cache.offset(4) == 8);
 }
 
+static void test_slot_fragmentation_recovery() {
+    ggml_moe_cache_slots cache(16, 1, 80, 1);
+
+    cache.access(1, 6);
+    cache.access(2, 6);
+    cache.access(3, 4);
+    assert(cache.erase(1));
+    assert(cache.erase(3));
+    assert(cache.largest_free_range() == 6);
+
+    const auto result = cache.access(4, 8);
+    assert(result.admitted);
+    assert(contains(result.evicted, 2));
+    assert(cache.resident_entries() == 1);
+    assert(cache.resident_bytes() == 8);
+    assert(cache.largest_free_range() == 8);
+
+    const auto & stats = cache.stats();
+    assert(stats.admission_attempts == 4);
+    assert(stats.admissions == 4);
+    assert(stats.allocation_failures == 0);
+    assert(stats.evictions == 1);
+}
+
+static void test_group_soft_budget() {
+    ggml_moe_cache_slots cache(12, 1, 80, 1);
+    cache.set_group_count(3);
+
+    cache.access(1, 4, 1);
+    cache.access(2, 4, 0);
+    cache.access(3, 4, 0);
+    const auto result = cache.access(4, 4, 2);
+
+    assert(result.admitted);
+    assert(result.evicted.size() == 1);
+    assert(result.evicted[0] == 2);
+    assert(cache.contains(1));
+    assert(!cache.contains(2));
+    assert(cache.contains(3));
+    assert(cache.contains(4));
+    assert(cache.group_resident_bytes(0) == 4);
+    assert(cache.group_resident_bytes(1) == 4);
+    assert(cache.group_resident_bytes(2) == 4);
+}
+
 int main() {
     test_frequency_admission();
     test_slru_protects_reused_entries();
     test_weighted_eviction();
     test_oversize_and_erase();
     test_slot_alignment_and_coalescing();
+    test_slot_fragmentation_recovery();
+    test_group_soft_budget();
     return 0;
 }

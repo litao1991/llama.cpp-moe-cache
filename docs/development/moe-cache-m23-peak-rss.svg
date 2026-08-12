@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="420" viewBox="0 0 760 420">
+  <rect width="760" height="420" fill="white"/>
+  <text x="380" y="28" text-anchor="middle" font-family="sans-serif" font-size="18">Peak process RSS</text>
+  <line x1="75" y1="350" x2="725" y2="350" stroke="#333"/>
+  <line x1="75" y1="50" x2="75" y2="350" stroke="#333"/>
+  <g font-family="sans-serif" font-size="12" fill="#333"><text x="64" y="354" text-anchor="end">0</text><text x="64" y="254" text-anchor="end">4,000</text><text x="64" y="154" text-anchor="end">8,000</text><text x="64" y="54" text-anchor="end">12,000</text></g>
+  <g stroke="#ddd"><line x1="75" y1="250" x2="725" y2="250"/><line x1="75" y1="150" x2="725" y2="150"/><line x1="75" y1="50" x2="725" y2="50"/></g>
+  <g fill="#e07020"><rect x="90" y="174" width="60" height="176"/><rect x="195" y="160" width="60" height="190"/><rect x="300" y="137" width="60" height="213"/><rect x="405" y="95" width="60" height="255"/><rect x="510" y="93" width="60" height="257"/><rect x="615" y="91" width="60" height="259"/></g>
+  <g font-family="sans-serif" font-size="12" text-anchor="middle"><text x="120" y="375">256</text><text x="225" y="375">512</text><text x="330" y="375">1024</text><text x="435" y="375">2048</text><text x="540" y="375">4096</text><text x="645" y="375">6144</text><text x="400" y="405">Requested cache budget (MiB)</text></g>
+</svg>

@@ -271,6 +271,7 @@ bool ggml_metal_set_moe_cache(ggml_metal_t ctx, size_t capacity_bytes) {
         GGML_LOG_ERROR("%s: failed to allocate %.2f MiB\n", __func__, capacity_bytes / 1024.0 / 1024.0);
         return false;
     }
+    ggml_metal_moe_cache_preload(ctx->moe_cache, ctx->moe_profile);
 
     GGML_LOG_INFO("%s: allocated %.2f MiB expert cache\n", __func__, capacity_bytes / 1024.0 / 1024.0);
     return true;

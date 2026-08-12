@@ -40,6 +40,13 @@ int main() {
     auto stats = ggml_metal_moe_profile_get_stats(profile);
     assert(stats.tensors == 2);
     assert(stats.selections == 10);
+    ggml_metal_moe_tensor_profile_stats tensor_stats;
+    assert(ggml_metal_moe_profile_get_tensor_stats(profile, 0, &tensor_stats));
+    assert(tensor_stats.tensor == tensor);
+    assert(tensor_stats.n_experts == 4);
+    assert(tensor_stats.counts[1] == 3);
+    assert(tensor_stats.counts[3] == 5);
+    assert(!ggml_metal_moe_profile_get_tensor_stats(profile, 2, &tensor_stats));
 
     ggml_metal_moe_profile_reset(profile);
     stats = ggml_metal_moe_profile_get_stats(profile);

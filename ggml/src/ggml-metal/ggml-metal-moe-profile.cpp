@@ -153,6 +153,23 @@ struct ggml_metal_moe_profile_stats ggml_metal_moe_profile_get_stats(ggml_metal_
     return { profile->tensors.size(), selections };
 }
 
+bool ggml_metal_moe_profile_get_tensor_stats(
+        ggml_metal_moe_profile_t profile,
+        size_t index,
+        struct ggml_metal_moe_tensor_profile_stats * stats) {
+    if (!profile || !stats) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(profile->mutex);
+    if (index >= profile->tensors.size()) {
+        return false;
+    }
+    const auto & entry = profile->tensors[index];
+    *stats = { entry->tensor, entry->counts, entry->n_experts };
+    return true;
+}
+
 struct ggml_metal_moe_profile_bindings ggml_metal_moe_profile_get_bindings(
         ggml_metal_moe_profile_t profile,
         const struct ggml_tensor * tensor) {

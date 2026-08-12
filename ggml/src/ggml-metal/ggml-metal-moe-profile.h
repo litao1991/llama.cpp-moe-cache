@@ -19,12 +19,22 @@ struct ggml_metal_moe_profile_stats {
     uint64_t selections;
 };
 
+struct ggml_metal_moe_tensor_profile_stats {
+    const struct ggml_tensor * tensor;
+    const uint32_t * counts;
+    uint32_t n_experts;
+};
+
 ggml_metal_moe_profile_t ggml_metal_moe_profile_init(ggml_metal_device_t dev);
 void ggml_metal_moe_profile_free(ggml_metal_moe_profile_t profile);
 
 void ggml_metal_moe_profile_reset(ggml_metal_moe_profile_t profile);
 void ggml_metal_moe_profile_finish(ggml_metal_moe_profile_t profile);
 struct ggml_metal_moe_profile_stats ggml_metal_moe_profile_get_stats(ggml_metal_moe_profile_t profile);
+bool ggml_metal_moe_profile_get_tensor_stats(
+        ggml_metal_moe_profile_t profile,
+        size_t index,
+        struct ggml_metal_moe_tensor_profile_stats * stats);
 struct ggml_metal_moe_profile_bindings ggml_metal_moe_profile_get_bindings(
         ggml_metal_moe_profile_t profile,
         const struct ggml_tensor * tensor);
