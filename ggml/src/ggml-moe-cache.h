@@ -105,6 +105,30 @@ struct ggml_moe_markov_prediction {
     uint32_t total;
 };
 
+struct ggml_moe_prefetch_limits {
+    size_t max_bytes = 0;
+    uint32_t min_probability_percent = 100;
+};
+
+class ggml_moe_prefetch_control {
+public:
+    ggml_moe_prefetch_control();
+    ~ggml_moe_prefetch_control();
+
+    ggml_moe_prefetch_control(const ggml_moe_prefetch_control &) = delete;
+    ggml_moe_prefetch_control & operator=(const ggml_moe_prefetch_control &) = delete;
+
+    void record_outcome(bool useful);
+    ggml_moe_prefetch_limits limits(size_t base_bytes, bool copy_backlog, uint32_t evictions, uint32_t remaining_tokens = UINT32_MAX);
+    uint32_t useful() const;
+    uint32_t wasted() const;
+    uint32_t updates() const;
+
+private:
+    struct impl;
+    std::unique_ptr<impl> pimpl;
+};
+
 class ggml_moe_markov {
 public:
     ggml_moe_markov(uint32_t state_count, uint32_t prediction_count = 2);
@@ -113,6 +137,8 @@ public:
     ggml_moe_markov(const ggml_moe_markov &) = delete;
     ggml_moe_markov & operator=(const ggml_moe_markov &) = delete;
 
+    void seed(const uint32_t * transitions, uint32_t prior_strength = 32);
+    std::vector<ggml_moe_markov_prediction> predict(const std::vector<uint32_t> & states) const;
     std::vector<ggml_moe_markov_prediction> observe(const std::vector<uint32_t> & states);
 
 private:

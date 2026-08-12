@@ -6,6 +6,7 @@
 #include <list>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 enum class ggml_moe_cache_segment {
@@ -98,6 +99,10 @@ struct ggml_moe_cache_policy::impl {
         return (uint64_t) it->second.short_frequency * 4 + it->second.long_frequency;
     }
 
+    uint64_t scaled_benefit(uint64_t key) const {
+        return benefit(key) * 1024 / 5;
+    }
+
     void move_to_front(ggml_moe_cache_entry & entry, uint64_t key) {
         std::list<uint64_t> & lru = entry.segment == ggml_moe_cache_segment::protected_lru ? protected_lru : probation;
         lru.erase(entry.position);
@@ -133,7 +138,7 @@ struct ggml_moe_cache_policy::impl {
         }
     }
 
-    uint32_t most_over_budget_group() const {
+    uint32_t most_over_budget_group(const std::vector<size_t> & resident_by_group) const {
         if (group_count == 0) {
             return UINT32_MAX;
         }
@@ -142,13 +147,17 @@ struct ggml_moe_cache_policy::impl {
         uint32_t selected = UINT32_MAX;
         size_t selected_excess = 0;
         for (uint32_t group = 0; group < group_count; ++group) {
-            const size_t bytes = group_resident[group];
+            const size_t bytes = resident_by_group[group];
             if (bytes > target && bytes - target > selected_excess) {
                 selected = group;
                 selected_excess = bytes - target;
             }
         }
         return selected;
+    }
+
+    uint32_t most_over_budget_group() const {
+        return most_over_budget_group(group_resident);
     }
 
     std::list<uint64_t>::iterator find_lru(std::list<uint64_t> & lru, uint32_t group) {
@@ -218,42 +227,70 @@ struct ggml_moe_cache_policy::impl {
         return true;
     }
 
-    bool find_victim(uint64_t & key) {
-        const uint32_t group = most_over_budget_group();
-        auto probation_it = find_lru(probation, group);
-        auto protected_it = protected_lru.end();
-        if (probation_it == probation.end()) {
-            protected_it = find_lru(protected_lru, group);
-            if (protected_it == protected_lru.end()) {
-                probation_it = find_lru(probation, UINT32_MAX);
-                if (probation_it == probation.end()) {
-                    protected_it = find_lru(protected_lru, UINT32_MAX);
+    bool find_victim(
+            uint64_t & key,
+            const std::vector<size_t> & resident_by_group,
+            const std::unordered_set<uint64_t> & excluded) const {
+        auto find = [&](const std::list<uint64_t> & lru, uint32_t group) {
+            for (auto it = lru.rbegin(); it != lru.rend(); ++it) {
+                if (excluded.find(*it) != excluded.end()) {
+                    continue;
+                }
+                const auto entry_it = entries.find(*it);
+                assert(entry_it != entries.end());
+                if (group == UINT32_MAX || entry_it->second.group == group) {
+                    key = *it;
+                    return true;
                 }
             }
-        }
-        if (probation_it != probation.end()) {
-            key = *probation_it;
-            return true;
-        }
-        if (protected_it != protected_lru.end()) {
-            key = *protected_it;
-            return true;
-        }
-        return false;
+            return false;
+        };
+
+        const uint32_t group = most_over_budget_group(resident_by_group);
+        return find(probation, group) ||
+               find(protected_lru, group) ||
+               find(probation, UINT32_MAX) ||
+               find(protected_lru, UINT32_MAX);
     }
 
-    bool cost_allows(uint64_t key, size_t size_bytes) {
+    bool find_victims(size_t size_bytes, std::vector<uint64_t> & victims) const {
+        size_t simulated_resident = resident;
+        std::vector<size_t> simulated_groups = group_resident;
+        std::unordered_set<uint64_t> excluded;
+        while (size_bytes > capacity - simulated_resident) {
+            uint64_t victim;
+            if (!find_victim(victim, simulated_groups, excluded)) {
+                return false;
+            }
+            const auto entry_it = entries.find(victim);
+            assert(entry_it != entries.end());
+            const ggml_moe_cache_entry & entry = entry_it->second;
+            simulated_resident -= entry.size_bytes;
+            if (entry.group < simulated_groups.size()) {
+                simulated_groups[entry.group] -= entry.size_bytes;
+            }
+            victims.push_back(victim);
+            excluded.insert(victim);
+        }
+        return true;
+    }
+
+    bool cost_allows(size_t size_bytes, uint64_t candidate_benefit) const {
         if (size_bytes <= capacity - resident) {
             return true;
         }
-        uint64_t victim;
-        if (!find_victim(victim)) {
+        std::vector<uint64_t> victims;
+        if (!find_victims(size_bytes, victims)) {
             return false;
         }
-        const auto victim_it = entries.find(victim);
-        assert(victim_it != entries.end());
-        return (long double) benefit(key) * victim_it->second.size_bytes * 4 >
-               (long double) benefit(victim) * size_bytes * 5;
+        long double victim_value = 0;
+        for (uint64_t victim : victims) {
+            const auto victim_it = entries.find(victim);
+            assert(victim_it != entries.end());
+            victim_value += (long double) scaled_benefit(victim) * victim_it->second.size_bytes;
+        }
+        const long double candidate_value = (long double) candidate_benefit * size_bytes;
+        return candidate_value * 4 > victim_value * 5;
     }
 
     ggml_moe_cache_result admit(uint64_t key, size_t size_bytes, uint32_t group) {
@@ -349,7 +386,7 @@ ggml_moe_cache_result ggml_moe_cache_policy::access(uint64_t key, size_t size_by
             std::max(history.short_frequency, history.long_frequency) < pimpl->admission_threshold) {
         return result;
     }
-    if (!pimpl->cost_allows(key, size_bytes)) {
+    if (!pimpl->cost_allows(size_bytes, pimpl->scaled_benefit(key))) {
         ++pimpl->stats.cost_rejections;
         result.cost_rejected = true;
         return result;
@@ -363,19 +400,11 @@ ggml_moe_cache_result ggml_moe_cache_policy::prefetch(uint64_t key, size_t size_
     if (pimpl->entries.find(key) != pimpl->entries.end()) {
         return pimpl->admit(key, size_bytes, group);
     }
-    if (predicted_benefit != UINT64_MAX && size_bytes > pimpl->capacity - pimpl->resident) {
-        uint64_t victim;
-        if (!pimpl->find_victim(victim)) {
-            return {};
-        }
-        const auto victim_it = pimpl->entries.find(victim);
-        assert(victim_it != pimpl->entries.end());
-        if ((long double) predicted_benefit * victim_it->second.size_bytes * 4 <=
-                (long double) pimpl->benefit(victim) * size_bytes * 5) {
-            ggml_moe_cache_result result;
-            result.cost_rejected = true;
-            return result;
-        }
+    if (predicted_benefit != UINT64_MAX && !pimpl->cost_allows(size_bytes, predicted_benefit)) {
+        ++pimpl->stats.cost_rejections;
+        ggml_moe_cache_result result;
+        result.cost_rejected = true;
+        return result;
     }
     return pimpl->admit(key, size_bytes, group);
 }
@@ -676,6 +705,88 @@ const ggml_moe_cache_stats & ggml_moe_cache_slots::stats() const {
     return pimpl->stats;
 }
 
+struct ggml_moe_prefetch_control::impl {
+    uint32_t useful = 0;
+    uint32_t wasted = 0;
+    uint32_t updates = 0;
+};
+
+ggml_moe_prefetch_control::ggml_moe_prefetch_control() : pimpl(new impl) {
+}
+
+ggml_moe_prefetch_control::~ggml_moe_prefetch_control() = default;
+
+void ggml_moe_prefetch_control::record_outcome(bool useful) {
+    if (useful) {
+        ++pimpl->useful;
+    } else {
+        ++pimpl->wasted;
+    }
+    if (pimpl->useful + pimpl->wasted >= 64) {
+        pimpl->useful /= 2;
+        pimpl->wasted /= 2;
+    }
+}
+
+ggml_moe_prefetch_limits ggml_moe_prefetch_control::limits(
+        size_t base_bytes,
+        bool copy_backlog,
+        uint32_t evictions,
+        uint32_t remaining_tokens) {
+    ++pimpl->updates;
+    if (base_bytes == 0 || remaining_tokens <= 1) {
+        return {};
+    }
+
+    ggml_moe_prefetch_limits result { base_bytes, 4 };
+    if (copy_backlog) {
+        result.max_bytes /= 4;
+    }
+    const uint32_t outcomes = pimpl->useful + pimpl->wasted;
+    if (outcomes < 8) {
+        result.max_bytes /= 2;
+    } else if ((uint64_t) pimpl->useful * 2 < outcomes) {
+        if ((uint64_t) pimpl->useful * 4 >= outcomes) {
+            result.max_bytes /= 2;
+            result.min_probability_percent = 8;
+        } else if ((uint64_t) pimpl->useful * 8 >= outcomes) {
+            result.max_bytes /= 4;
+            result.min_probability_percent = 12;
+        } else if (pimpl->updates % 16 == 0) {
+            result.max_bytes /= 8;
+            result.min_probability_percent = 20;
+        } else {
+            return {};
+        }
+    }
+
+    if (evictions >= 4) {
+        result.max_bytes /= 4;
+    } else if (evictions > 0) {
+        result.max_bytes /= 2;
+    }
+    if (remaining_tokens <= 4) {
+        result.max_bytes /= 4;
+        result.min_probability_percent = std::max(result.min_probability_percent, 20u);
+    } else if (remaining_tokens <= 16) {
+        result.max_bytes /= 2;
+        result.min_probability_percent = std::max(result.min_probability_percent, 8u);
+    }
+    return result;
+}
+
+uint32_t ggml_moe_prefetch_control::useful() const {
+    return pimpl->useful;
+}
+
+uint32_t ggml_moe_prefetch_control::wasted() const {
+    return pimpl->wasted;
+}
+
+uint32_t ggml_moe_prefetch_control::updates() const {
+    return pimpl->updates;
+}
+
 struct ggml_moe_markov::impl {
     impl(uint32_t state_count, uint32_t prediction_count) :
         state_count(state_count),
@@ -696,6 +807,74 @@ ggml_moe_markov::ggml_moe_markov(uint32_t state_count, uint32_t prediction_count
 }
 
 ggml_moe_markov::~ggml_moe_markov() = default;
+
+void ggml_moe_markov::seed(const uint32_t * transitions, uint32_t prior_strength) {
+    std::fill(pimpl->transitions.begin(), pimpl->transitions.end(), 0);
+    std::fill(pimpl->totals.begin(), pimpl->totals.end(), 0);
+    pimpl->previous.clear();
+    if (!transitions || prior_strength == 0) {
+        return;
+    }
+
+    for (uint32_t source = 0; source < pimpl->state_count; ++source) {
+        uint64_t total = 0;
+        for (uint32_t destination = 0; destination < pimpl->state_count; ++destination) {
+            total += transitions[(size_t) source * pimpl->state_count + destination];
+        }
+        if (total == 0) {
+            continue;
+        }
+        for (uint32_t destination = 0; destination < pimpl->state_count; ++destination) {
+            const uint32_t count = transitions[(size_t) source * pimpl->state_count + destination];
+            if (count == 0) {
+                continue;
+            }
+            const uint32_t scaled = (uint32_t) (((uint64_t) count * prior_strength + total / 2) / total);
+            if (scaled == 0) {
+                continue;
+            }
+            pimpl->transitions[(size_t) source * pimpl->state_count + destination] =
+                    (uint16_t) std::min<uint32_t>(scaled, std::numeric_limits<uint16_t>::max());
+            pimpl->totals[source] += scaled;
+        }
+    }
+}
+
+std::vector<ggml_moe_markov_prediction> ggml_moe_markov::predict(const std::vector<uint32_t> & states) const {
+    std::vector<ggml_moe_markov_prediction> ranked;
+    ranked.reserve(pimpl->state_count);
+    uint64_t total = 0;
+    for (uint32_t current : states) {
+        if (current < pimpl->state_count) {
+            total += pimpl->totals[current];
+        }
+    }
+    const uint32_t total_clamped = (uint32_t) std::min<uint64_t>(total, std::numeric_limits<uint32_t>::max());
+    for (uint32_t predicted = 0; predicted < pimpl->state_count; ++predicted) {
+        uint64_t count = 0;
+        for (uint32_t current : states) {
+            if (current < pimpl->state_count) {
+                count += pimpl->transitions[(size_t) current * pimpl->state_count + predicted];
+            }
+        }
+        if (count > 0) {
+            ranked.push_back({
+                predicted,
+                (uint32_t) std::min<uint64_t>(count, std::numeric_limits<uint32_t>::max()),
+                total_clamped,
+            });
+        }
+    }
+    std::sort(ranked.begin(), ranked.end(), [](const ggml_moe_markov_prediction & a, const ggml_moe_markov_prediction & b) {
+        const uint64_t a_score = (uint64_t) a.count * b.total;
+        const uint64_t b_score = (uint64_t) b.count * a.total;
+        return a_score != b_score ? a_score > b_score : a.state < b.state;
+    });
+    if (ranked.size() > pimpl->prediction_count) {
+        ranked.resize(pimpl->prediction_count);
+    }
+    return ranked;
+}
 
 std::vector<ggml_moe_markov_prediction> ggml_moe_markov::observe(const std::vector<uint32_t> & states) {
     if (states.empty()) {
@@ -730,38 +909,7 @@ std::vector<ggml_moe_markov_prediction> ggml_moe_markov::observe(const std::vect
         }
     }
 
-    std::vector<ggml_moe_markov_prediction> ranked;
-    ranked.reserve(pimpl->state_count);
-    uint64_t total = 0;
-    for (uint32_t current : states) {
-        if (current < pimpl->state_count) {
-            total += pimpl->totals[current];
-        }
-    }
-    const uint32_t total_clamped = (uint32_t) std::min<uint64_t>(total, std::numeric_limits<uint32_t>::max());
-    for (uint32_t predicted = 0; predicted < pimpl->state_count; ++predicted) {
-        uint64_t count = 0;
-        for (uint32_t current : states) {
-            if (current < pimpl->state_count) {
-                count += pimpl->transitions[(size_t) current * pimpl->state_count + predicted];
-            }
-        }
-        if (count > 0) {
-            ranked.push_back({
-                predicted,
-                (uint32_t) std::min<uint64_t>(count, std::numeric_limits<uint32_t>::max()),
-                total_clamped,
-            });
-        }
-    }
-    std::sort(ranked.begin(), ranked.end(), [](const ggml_moe_markov_prediction & a, const ggml_moe_markov_prediction & b) {
-        const uint64_t a_score = (uint64_t) a.count * b.total;
-        const uint64_t b_score = (uint64_t) b.count * a.total;
-        return a_score != b_score ? a_score > b_score : a.state < b.state;
-    });
-    if (ranked.size() > pimpl->prediction_count) {
-        ranked.resize(pimpl->prediction_count);
-    }
+    auto ranked = predict(states);
     pimpl->previous = states;
     return ranked;
 }

@@ -27,9 +27,14 @@ int main() {
 
     auto bindings = ggml_metal_moe_profile_get_bindings(profile, tensor);
     assert(bindings.enabled);
+    assert(bindings.transitions_enabled);
     assert(bindings.host_counts != nullptr);
+    assert(bindings.host_transitions != nullptr);
+    assert(bindings.host_previous != nullptr);
     bindings.host_counts[1] = 3;
     bindings.host_counts[3] = 5;
+    bindings.host_transitions[1 * 4 + 3] = 7;
+    bindings.host_previous[0] = 2;
 
     auto bindings2 = ggml_metal_moe_profile_get_bindings(profile, tensor2);
     assert(bindings2.enabled);
@@ -46,18 +51,25 @@ int main() {
     assert(tensor_stats.n_experts == 4);
     assert(tensor_stats.counts[1] == 3);
     assert(tensor_stats.counts[3] == 5);
+    assert(tensor_stats.transitions[1 * 4 + 3] == 7);
     assert(!ggml_metal_moe_profile_get_tensor_stats(profile, 2, &tensor_stats));
 
     ggml_metal_moe_profile_reset(profile);
     stats = ggml_metal_moe_profile_get_stats(profile);
     assert(stats.tensors == 2);
     assert(stats.selections == 0);
+    assert(bindings.host_transitions[1 * 4 + 3] == 0);
+    assert(bindings.host_previous[0] == UINT32_MAX);
 
     bindings.host_counts[2] = 7;
     ggml_metal_moe_profile_finish(profile);
     stats = ggml_metal_moe_profile_get_stats(profile);
     assert(stats.selections == 7);
     assert(!ggml_metal_moe_profile_get_bindings(profile, tensor).enabled);
+
+    ggml_metal_moe_profile_release_transitions(profile);
+    assert(ggml_metal_moe_profile_get_tensor_stats(profile, 0, &tensor_stats));
+    assert(tensor_stats.transitions == nullptr);
 
     ggml_metal_moe_profile_free(profile);
     ggml_free(ctx);

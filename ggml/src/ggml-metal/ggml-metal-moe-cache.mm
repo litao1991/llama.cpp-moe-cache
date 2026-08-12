@@ -19,6 +19,21 @@
 
 static constexpr size_t GGML_METAL_MOE_STAGING_SIZE = 32 * 1024 * 1024;
 
+static bool ggml_metal_moe_env_enabled(const char * name, bool default_value) {
+    const char * value = getenv(name);
+    return value ? strcmp(value, "0") != 0 : default_value;
+}
+
+static uint32_t ggml_metal_moe_env_u32(const char * name, uint32_t default_value) {
+    const char * value = getenv(name);
+    if (!value) {
+        return default_value;
+    }
+    char * end = nullptr;
+    const unsigned long parsed = strtoul(value, &end, 10);
+    return end != value && *end == '\0' && parsed <= UINT32_MAX ? (uint32_t) parsed : default_value;
+}
+
 struct ggml_metal_moe_tensor_cache {
     ~ggml_metal_moe_tensor_cache() {
         if (page_table_buffer) {
@@ -46,6 +61,10 @@ struct ggml_metal_moe_cache {
         dev(dev),
         capacity(capacity_bytes),
         slots(capacity_bytes, 4096) {
+        prefetch_enabled = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_PREFETCH", true);
+        adaptive_prefetch = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_ADAPTIVE_PREFETCH", true);
+        prefill_markov = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_PREFILL_MARKOV", true);
+        remaining_tokens_hint = ggml_metal_moe_env_u32("GGML_METAL_MOE_CACHE_REMAINING_TOKENS", UINT32_MAX);
         buffer = ggml_metal_buffer_init(dev, capacity_bytes, false);
         for (size_t i = 0; i < 2; ++i) {
             staging[i] = ggml_metal_buffer_init(dev, GGML_METAL_MOE_STAGING_SIZE, true);
@@ -54,8 +73,13 @@ struct ggml_metal_moe_cache {
 
     ~ggml_metal_moe_cache() {
         wait_for_copy();
+        wasted_prefetches += prefetched.size();
+        for (size_t i = 0; i < prefetched.size(); ++i) {
+            prefetch_control.record_outcome(false);
+        }
+        prefetched.clear();
         const auto & stats = slots.stats();
-        GGML_LOG_INFO("%s: accesses = %llu, hits = %llu, admission attempts = %llu, admissions = %llu, cost rejections = %llu, allocation failures = %llu, evictions = %llu, resident entries = %zu, resident bytes = %zu, staging batches = %llu, async copies = %llu, predictions = %llu, prefetch attempts = %llu, prefetch admissions = %llu, useful prefetches = %llu, wasted prefetches = %llu\n",
+        GGML_LOG_INFO("%s: accesses = %llu, hits = %llu, admission attempts = %llu, admissions = %llu, cost rejections = %llu, allocation failures = %llu, evictions = %llu, resident entries = %zu, resident bytes = %zu, staging batches = %llu, async copies = %llu, predictions = %llu, prefetch attempts = %llu, prefetch admissions = %llu, useful prefetches = %llu, wasted prefetches = %llu, adaptive skips = %llu, copy pressure updates = %llu, remaining stops = %llu, controller outcomes = %u/%u, controller updates = %u, prefill Markov tensors = %zu\n",
                 __func__,
                 (unsigned long long) stats.accesses,
                 (unsigned long long) stats.hits,
@@ -72,7 +96,14 @@ struct ggml_metal_moe_cache {
                 (unsigned long long) prefetch_attempts,
                 (unsigned long long) prefetch_admissions,
                 (unsigned long long) useful_prefetches,
-                (unsigned long long) wasted_prefetches);
+                (unsigned long long) wasted_prefetches,
+                (unsigned long long) adaptive_skips,
+                (unsigned long long) copy_pressure_updates,
+                (unsigned long long) remaining_stops,
+                prefetch_control.useful(),
+                prefetch_control.wasted(),
+                prefetch_control.updates(),
+                prefill_markov_tensors);
         tensors.clear();
         for (auto & item : staging) {
             if (item) {
@@ -107,7 +138,27 @@ struct ggml_metal_moe_cache {
     uint64_t prefetch_admissions = 0;
     uint64_t useful_prefetches = 0;
     uint64_t wasted_prefetches = 0;
+    uint64_t adaptive_skips = 0;
+    uint64_t copy_pressure_updates = 0;
+    uint64_t remaining_stops = 0;
+    uint64_t decode_updates = 0;
+    size_t prefill_markov_tensors = 0;
+    bool prefetch_enabled = true;
+    bool adaptive_prefetch = true;
+    bool prefill_markov = true;
+    uint32_t remaining_tokens_hint = UINT32_MAX;
+    ggml_moe_prefetch_control prefetch_control;
     std::unordered_set<uint64_t> prefetched;
+
+    bool copy_backlog() const {
+        uint32_t in_flight = 0;
+        for (id<MTLCommandBuffer> item : staging_cmd_buf) {
+            if (item && [item status] < MTLCommandBufferStatusCompleted) {
+                ++in_flight;
+            }
+        }
+        return in_flight == 2 || (in_flight > 0 && staged_bytes >= GGML_METAL_MOE_STAGING_SIZE * 3 / 4);
+    }
 
     void begin_copy() {
         if (copy_cmd_buf) {
@@ -177,6 +228,7 @@ struct ggml_metal_moe_cache {
     void invalidate(uint64_t key) {
         if (prefetched.erase(key) > 0) {
             ++wasted_prefetches;
+            prefetch_control.record_outcome(false);
         }
         const uint32_t tensor_id = (uint32_t) (key >> 32);
         const uint32_t expert_id = (uint32_t) key;
@@ -323,6 +375,8 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
         uint32_t total;
     };
     std::vector<prediction> predictions;
+    uint32_t demand_evictions = 0;
+    bool observed_routes = false;
 
     for (const auto & entry_ptr : cache->tensors) {
         ggml_metal_moe_tensor_cache & entry = *entry_ptr;
@@ -338,7 +392,9 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
             const auto result = cache->slots.access(key, entry.expert_size, entry.layer);
             if (result.hit && cache->prefetched.erase(key) > 0) {
                 ++cache->useful_prefetches;
+                cache->prefetch_control.record_outcome(true);
             }
+            demand_evictions += (uint32_t) result.evicted.size();
             for (uint64_t evicted : result.evicted) {
                 cache->invalidate(evicted);
             }
@@ -351,10 +407,16 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
         for (const auto & predicted : entry.markov->observe(current_experts)) {
             ++cache->predictions;
             const uint64_t key = ggml_metal_moe_cache_key(entry.id, predicted.state);
-            if (predicted.count >= 3 && (uint64_t) predicted.count * 100 >= (uint64_t) predicted.total * 8 && !cache->slots.contains(key)) {
+            if (predicted.count > 0 && predicted.total > 0 && !cache->slots.contains(key)) {
                 predictions.push_back({ &entry, predicted.state, predicted.count, predicted.total });
             }
         }
+        observed_routes = observed_routes || !current_experts.empty();
+    }
+
+    if (!observed_routes) {
+        cache->commit_copy();
+        return;
     }
 
     std::sort(predictions.begin(), predictions.end(), [](const prediction & a, const prediction & b) {
@@ -362,11 +424,27 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
         const long double b_score = (long double) b.count / b.total / b.entry->expert_size;
         return a_score != b_score ? a_score > b_score : a.count > b.count;
     });
-    const size_t prefetch_limit = std::min<size_t>(8 * 1024 * 1024, cache->capacity / 64);
+    const size_t base_prefetch_limit = std::min<size_t>(8 * 1024 * 1024, cache->capacity / 64);
+    ++cache->decode_updates;
+    const uint32_t remaining_tokens = cache->remaining_tokens_hint == UINT32_MAX ? UINT32_MAX :
+            (cache->remaining_tokens_hint > cache->decode_updates ? cache->remaining_tokens_hint - cache->decode_updates : 0);
+    ggml_moe_prefetch_limits limits = { base_prefetch_limit, 4 };
+    if (!cache->prefetch_enabled) {
+        limits = {};
+    } else if (cache->adaptive_prefetch) {
+        const bool copy_backlog = cache->copy_backlog();
+        cache->copy_pressure_updates += copy_backlog;
+        cache->remaining_stops += remaining_tokens <= 1;
+        limits = cache->prefetch_control.limits(base_prefetch_limit, copy_backlog, demand_evictions, remaining_tokens);
+    }
+    if (limits.max_bytes == 0 && !predictions.empty()) {
+        ++cache->adaptive_skips;
+    }
     size_t prefetch_bytes = 0;
     for (const auto & prediction : predictions) {
         const size_t allocation_size = (prediction.entry->expert_size + 4095) / 4096 * 4096;
-        if (prefetch_bytes >= prefetch_limit || allocation_size > prefetch_limit - prefetch_bytes) {
+        if ((uint64_t) prediction.count * 100 < (uint64_t) prediction.total * limits.min_probability_percent ||
+                prefetch_bytes >= limits.max_bytes || allocation_size > limits.max_bytes - prefetch_bytes) {
             continue;
         }
         const uint64_t key = ggml_metal_moe_cache_key(prediction.entry->id, prediction.expert);
@@ -378,7 +456,7 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
                 key,
                 prediction.entry->expert_size,
                 prediction.entry->layer,
-                (uint64_t) prediction.count * 1000 / prediction.total);
+                (uint64_t) prediction.count * 1024 / prediction.total);
         for (uint64_t evicted : result.evicted) {
             cache->invalidate(evicted);
         }
@@ -416,12 +494,17 @@ void ggml_metal_moe_cache_preload(ggml_metal_moe_cache_t cache, ggml_metal_moe_p
         if (tensor_it == cache->tensor_map.end()) {
             continue;
         }
+        if (cache->prefill_markov && stats.transitions) {
+            tensor_it->second->markov->seed(stats.transitions);
+            ++cache->prefill_markov_tensors;
+        }
         for (uint32_t expert = 0; expert < stats.n_experts; ++expert) {
             if (stats.counts[expert] > 0) {
                 candidates.push_back({ tensor_it->second, expert, stats.counts[expert] });
             }
         }
     }
+    ggml_metal_moe_profile_release_transitions(profile);
 
     std::sort(candidates.begin(), candidates.end(), [](const auto & a, const auto & b) {
         const long double a_score = (long double) a.count / a.entry->expert_size;
@@ -447,8 +530,7 @@ void ggml_metal_moe_cache_preload(ggml_metal_moe_cache_t cache, ggml_metal_moe_p
         if (cache->slots.contains(key)) {
             return;
         }
-        cache->slots.access(key, candidate.entry->expert_size, candidate.entry->layer);
-        const auto result = cache->slots.access(key, candidate.entry->expert_size, candidate.entry->layer);
+        const auto result = cache->slots.prefetch(key, candidate.entry->expert_size, candidate.entry->layer);
         if (!result.admitted) {
             return;
         }

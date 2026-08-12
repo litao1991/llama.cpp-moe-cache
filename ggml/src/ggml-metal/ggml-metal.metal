@@ -10389,6 +10389,8 @@ kernel void kernel_mul_mm_id_map0(
         device        char * htpe,
         device        char * hids,
         device atomic_uint * moe_profile,
+        device atomic_uint * moe_transitions,
+        device        uint * moe_previous,
         threadgroup   char * shmem [[threadgroup(0)]],
         ushort tpitg[[thread_position_in_threadgroup]],
         ushort   ntg[[threads_per_threadgroup]]) {
@@ -10430,6 +10432,26 @@ kernel void kernel_mul_mm_id_map0(
             n_all += sel > 0;
         }
 
+        if (args.moe_transitions && i21 + tpitg < args.ne21) {
+            const int token = i21 + tpitg;
+            device const int32_t * current = (device const int32_t *) (src2 + token*args.nb21);
+            device const int32_t * previous = token > 0 ? (device const int32_t *) (src2 + (token - 1)*args.nb21) : nullptr;
+            #pragma unroll(ne20)
+            for (short source_index = 0; source_index < ne20; ++source_index) {
+                const uint source = token > 0 ? (uint) previous[source_index] : moe_previous[source_index];
+                if (source >= (uint) args.ne02) {
+                    continue;
+                }
+                #pragma unroll(ne20)
+                for (short destination_index = 0; destination_index < ne20; ++destination_index) {
+                    const int32_t destination = current[destination_index];
+                    if (destination >= 0 && destination < args.ne02) {
+                        atomic_fetch_add_explicit(moe_transitions + (ulong) source*args.ne02 + destination, 1u, memory_order_relaxed);
+                    }
+                }
+            }
+        }
+
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
@@ -10437,6 +10459,10 @@ kernel void kernel_mul_mm_id_map0(
     tpe_u32[ide] = n_all;
     if (args.moe_profile) {
         atomic_fetch_add_explicit(moe_profile + ide, n_all, memory_order_relaxed);
+    }
+    if (args.moe_transitions && ide < ne20) {
+        device const int32_t * last = (device const int32_t *) (src2 + (args.ne21 - 1)*args.nb21);
+        moe_previous[ide] = last[ide];
     }
 }
 

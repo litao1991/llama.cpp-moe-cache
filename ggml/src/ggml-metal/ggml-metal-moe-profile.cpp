@@ -4,7 +4,9 @@
 #include "ggml-impl.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -20,6 +22,9 @@ struct ggml_metal_moe_tensor_profile {
     uint32_t n_experts = 0;
     uint32_t * counts = nullptr;
     size_t offset = 0;
+    uint32_t * transitions = nullptr;
+    uint32_t * previous = nullptr;
+    size_t transition_offset = SIZE_MAX;
 };
 
 struct ggml_metal_moe_profile {
@@ -27,15 +32,23 @@ struct ggml_metal_moe_profile {
         if (buffer) {
             ggml_metal_buffer_free(buffer);
         }
+        if (transition_buffer) {
+            ggml_metal_buffer_free(transition_buffer);
+        }
     }
 
     ggml_metal_buffer_t buffer = nullptr;
     uint32_t * counts = nullptr;
     size_t capacity = 0;
     size_t used = 0;
+    ggml_metal_buffer_t transition_buffer = nullptr;
+    uint32_t * transition_counts = nullptr;
+    size_t transition_capacity = 0;
+    size_t transition_used = 0;
     bool active = true;
     bool logged = false;
     bool full_logged = false;
+    bool transition_full_logged = false;
     std::mutex mutex;
     std::unordered_map<const ggml_tensor *, ggml_metal_moe_tensor_profile *> tensor_map;
     std::vector<std::unique_ptr<ggml_metal_moe_tensor_profile>> tensors;
@@ -44,7 +57,12 @@ struct ggml_metal_moe_profile {
 static struct ggml_metal_moe_profile_bindings ggml_metal_moe_profile_disabled(void) {
     return {
         false,
+        false,
         { nullptr, 0 },
+        { nullptr, 0 },
+        { nullptr, 0 },
+        nullptr,
+        nullptr,
         nullptr,
     };
 }
@@ -65,6 +83,21 @@ ggml_metal_moe_profile_t ggml_metal_moe_profile_init(ggml_metal_device_t dev) {
     profile->counts = (uint32_t *) ggml_metal_buffer_get_base(profile->buffer);
     profile->capacity = capacity / sizeof(uint32_t);
     std::fill(profile->counts, profile->counts + profile->capacity, 0);
+
+    const char * prefill_markov = getenv("GGML_METAL_MOE_CACHE_PREFILL_MARKOV");
+    if (prefill_markov && strcmp(prefill_markov, "0") == 0) {
+        return profile.release();
+    }
+
+    static constexpr size_t transition_capacity = 64 * 1024 * 1024;
+    profile->transition_buffer = ggml_metal_buffer_init(dev, transition_capacity, true);
+    if (profile->transition_buffer && ggml_metal_buffer_is_shared(profile->transition_buffer)) {
+        profile->transition_counts = (uint32_t *) ggml_metal_buffer_get_base(profile->transition_buffer);
+        profile->transition_capacity = transition_capacity / sizeof(uint32_t);
+    } else if (profile->transition_buffer) {
+        ggml_metal_buffer_free(profile->transition_buffer);
+        profile->transition_buffer = nullptr;
+    }
     return profile.release();
 }
 
@@ -83,6 +116,13 @@ void ggml_metal_moe_profile_reset(ggml_metal_moe_profile_t profile) {
     }
 
     std::fill(profile->counts, profile->counts + profile->used, 0);
+    for (const auto & entry : profile->tensors) {
+        if (!entry->transitions) {
+            continue;
+        }
+        std::fill(entry->transitions, entry->transitions + (size_t) entry->n_experts * entry->n_experts, 0);
+        std::fill(entry->previous, entry->previous + entry->n_experts, UINT32_MAX);
+    }
 }
 
 void ggml_metal_moe_profile_finish(ggml_metal_moe_profile_t profile) {
@@ -138,6 +178,26 @@ void ggml_metal_moe_profile_finish(ggml_metal_moe_profile_t profile) {
     }
 }
 
+void ggml_metal_moe_profile_release_transitions(ggml_metal_moe_profile_t profile) {
+    if (!profile) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(profile->mutex);
+    for (const auto & entry : profile->tensors) {
+        entry->transitions = nullptr;
+        entry->previous = nullptr;
+        entry->transition_offset = SIZE_MAX;
+    }
+    if (profile->transition_buffer) {
+        ggml_metal_buffer_free(profile->transition_buffer);
+        profile->transition_buffer = nullptr;
+    }
+    profile->transition_counts = nullptr;
+    profile->transition_capacity = 0;
+    profile->transition_used = 0;
+}
+
 struct ggml_metal_moe_profile_stats ggml_metal_moe_profile_get_stats(ggml_metal_moe_profile_t profile) {
     if (!profile) {
         return { 0, 0 };
@@ -166,7 +226,7 @@ bool ggml_metal_moe_profile_get_tensor_stats(
         return false;
     }
     const auto & entry = profile->tensors[index];
-    *stats = { entry->tensor, entry->counts, entry->n_experts };
+    *stats = { entry->tensor, entry->counts, entry->transitions, entry->n_experts };
     return true;
 }
 
@@ -184,12 +244,26 @@ struct ggml_metal_moe_profile_bindings ggml_metal_moe_profile_get_bindings(
 
     const auto existing = profile->tensor_map.find(tensor);
     if (existing != profile->tensor_map.end()) {
+        ggml_metal_moe_tensor_profile * entry = existing->second;
         ggml_metal_buffer_id counts = ggml_metal_buffer_get_base_id(profile->buffer);
-        counts.offs += existing->second->offset * sizeof(uint32_t);
+        counts.offs += entry->offset * sizeof(uint32_t);
+        ggml_metal_buffer_id transitions = { nullptr, 0 };
+        ggml_metal_buffer_id previous = { nullptr, 0 };
+        if (entry->transitions) {
+            transitions = ggml_metal_buffer_get_base_id(profile->transition_buffer);
+            transitions.offs += entry->transition_offset * sizeof(uint32_t);
+            previous = transitions;
+            previous.offs += (size_t) entry->n_experts * entry->n_experts * sizeof(uint32_t);
+        }
         return {
             true,
+            entry->transitions != nullptr,
             counts,
-            existing->second->counts,
+            transitions,
+            previous,
+            entry->counts,
+            entry->transitions,
+            entry->previous,
         };
     }
 
@@ -214,15 +288,43 @@ struct ggml_metal_moe_profile_bindings ggml_metal_moe_profile_get_bindings(
     entry->counts = profile->counts + entry->offset;
     profile->used += entry->n_experts;
 
+    const size_t matrix_entries = n_experts <= UINT16_MAX ? n_experts * n_experts : 0;
+    const size_t transition_entries = matrix_entries + n_experts;
+    if (profile->transition_counts && n_experts <= UINT16_MAX &&
+            transition_entries <= profile->transition_capacity - profile->transition_used) {
+        entry->transition_offset = profile->transition_used;
+        entry->transitions = profile->transition_counts + entry->transition_offset;
+        entry->previous = entry->transitions + matrix_entries;
+        std::fill(entry->transitions, entry->transitions + matrix_entries, 0);
+        std::fill(entry->previous, entry->previous + n_experts, UINT32_MAX);
+        profile->transition_used += transition_entries;
+    } else if (!profile->transition_full_logged) {
+        GGML_LOG_WARN("%s: transition arena is full at %zu entries\n", __func__, profile->transition_used);
+        profile->transition_full_logged = true;
+    }
+
     ggml_metal_moe_tensor_profile * raw = entry.get();
     profile->tensor_map.emplace(tensor, raw);
     profile->tensors.emplace_back(std::move(entry));
 
     ggml_metal_buffer_id counts = ggml_metal_buffer_get_base_id(profile->buffer);
     counts.offs += raw->offset * sizeof(uint32_t);
+    ggml_metal_buffer_id transitions = { nullptr, 0 };
+    ggml_metal_buffer_id previous = { nullptr, 0 };
+    if (raw->transitions) {
+        transitions = ggml_metal_buffer_get_base_id(profile->transition_buffer);
+        transitions.offs += raw->transition_offset * sizeof(uint32_t);
+        previous = transitions;
+        previous.offs += (size_t) raw->n_experts * raw->n_experts * sizeof(uint32_t);
+    }
     return {
         true,
+        raw->transitions != nullptr,
         counts,
+        transitions,
+        previous,
         raw->counts,
+        raw->transitions,
+        raw->previous,
     };
 }

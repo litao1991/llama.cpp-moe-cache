@@ -2633,6 +2633,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
                 ne20, // n_expert_used
                 nb21,
                 moe_profile.enabled,
+                moe_profile.transitions_enabled,
             };
 
             auto pipeline = ggml_metal_library_get_pipeline_mul_mm_id_map0(lib, ne02, ne20);
@@ -2649,6 +2650,8 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer  (enc, bid_tpe,  2);
             ggml_metal_encoder_set_buffer  (enc, bid_ids,  3);
             ggml_metal_encoder_set_buffer  (enc, moe_profile.enabled ? moe_profile.counts : bid_src0, 4);
+            ggml_metal_encoder_set_buffer  (enc, moe_profile.transitions_enabled ? moe_profile.transitions : bid_src0, 5);
+            ggml_metal_encoder_set_buffer  (enc, moe_profile.transitions_enabled ? moe_profile.previous : bid_src0, 6);
 
             ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 

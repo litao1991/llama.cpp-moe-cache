@@ -195,6 +195,23 @@ static void test_cost_aware_admission() {
     assert(!cache.contains(1));
 }
 
+static void test_full_eviction_set_cost() {
+    ggml_moe_cache_policy cache(10, 80, 1, 0, 0);
+
+    cache.prefetch(1, 4);
+    cache.prefetch(2, 6);
+    for (int i = 0; i < 8; ++i) {
+        cache.access(2, 6);
+    }
+
+    const auto rejected = cache.prefetch(3, 7, UINT32_MAX, 1024);
+    assert(rejected.cost_rejected);
+    assert(!rejected.admitted);
+    assert(cache.contains(1));
+    assert(cache.contains(2));
+    assert(cache.stats().cost_rejections == 1);
+}
+
 static void test_frequency_windows() {
     ggml_moe_cache_policy cache(8, 80, 2, 8, 2);
 
@@ -226,6 +243,25 @@ static void test_markov_prediction() {
     assert(predictions[0].total == 2);
 }
 
+static void test_markov_prefill_seed() {
+    ggml_moe_markov markov(4, 2);
+    std::vector<uint32_t> transitions(16, 0);
+    transitions[1 * 4 + 2] = 6;
+    transitions[1 * 4 + 3] = 2;
+    markov.seed(transitions.data(), 16);
+
+    auto predictions = markov.predict({ 1 });
+    assert(predictions.size() == 2);
+    assert(predictions[0].state == 2);
+    assert(predictions[0].count == 12);
+    assert(predictions[0].total == 16);
+    assert(predictions[1].state == 3);
+
+    predictions = markov.observe({ 1 });
+    assert(predictions.size() == 2);
+    assert(predictions[0].state == 2);
+}
+
 static void test_prefetch_does_not_count_as_access() {
     ggml_moe_cache_slots cache(4, 1, 80, 2);
 
@@ -247,6 +283,31 @@ static void test_prefetch_does_not_count_as_access() {
     assert(cache.stats().hits == 1);
 }
 
+static void test_adaptive_prefetch_control() {
+    ggml_moe_prefetch_control control;
+
+    auto limits = control.limits(1024, false, 0);
+    assert(limits.max_bytes == 512);
+    assert(limits.min_probability_percent == 4);
+
+    for (int i = 0; i < 8; ++i) {
+        control.record_outcome(true);
+    }
+    limits = control.limits(1024, false, 0);
+    assert(limits.max_bytes == 1024);
+    assert(limits.min_probability_percent == 4);
+
+    limits = control.limits(1024, true, 0);
+    assert(limits.max_bytes == 256);
+    assert(limits.min_probability_percent == 4);
+    limits = control.limits(1024, false, 4);
+    assert(limits.max_bytes == 256);
+    assert(limits.min_probability_percent == 4);
+    limits = control.limits(1024, false, 0, 4);
+    assert(limits.max_bytes == 256);
+    assert(limits.min_probability_percent == 20);
+}
+
 int main() {
     test_frequency_admission();
     test_slru_protects_reused_entries();
@@ -256,8 +317,11 @@ int main() {
     test_slot_fragmentation_recovery();
     test_group_soft_budget();
     test_cost_aware_admission();
+    test_full_eviction_set_cost();
     test_frequency_windows();
     test_markov_prediction();
+    test_markov_prefill_seed();
     test_prefetch_does_not_count_as_access();
+    test_adaptive_prefetch_control();
     return 0;
 }

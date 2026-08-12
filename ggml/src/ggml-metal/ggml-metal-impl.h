@@ -513,6 +513,7 @@ typedef struct {
     int32_t  ne20;  // n_expert_used
     uint64_t nb21;
     uint32_t moe_profile;
+    uint32_t moe_transitions;
 } ggml_metal_kargs_mul_mm_id_map0;
 
 typedef struct {

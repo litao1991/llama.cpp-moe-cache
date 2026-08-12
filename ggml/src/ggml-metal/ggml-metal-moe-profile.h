@@ -10,8 +10,13 @@ typedef struct ggml_metal_moe_profile * ggml_metal_moe_profile_t;
 
 struct ggml_metal_moe_profile_bindings {
     bool enabled;
+    bool transitions_enabled;
     struct ggml_metal_buffer_id counts;
+    struct ggml_metal_buffer_id transitions;
+    struct ggml_metal_buffer_id previous;
     uint32_t * host_counts;
+    uint32_t * host_transitions;
+    uint32_t * host_previous;
 };
 
 struct ggml_metal_moe_profile_stats {
@@ -22,6 +27,7 @@ struct ggml_metal_moe_profile_stats {
 struct ggml_metal_moe_tensor_profile_stats {
     const struct ggml_tensor * tensor;
     const uint32_t * counts;
+    const uint32_t * transitions;
     uint32_t n_experts;
 };
 
@@ -30,6 +36,7 @@ void ggml_metal_moe_profile_free(ggml_metal_moe_profile_t profile);
 
 void ggml_metal_moe_profile_reset(ggml_metal_moe_profile_t profile);
 void ggml_metal_moe_profile_finish(ggml_metal_moe_profile_t profile);
+void ggml_metal_moe_profile_release_transitions(ggml_metal_moe_profile_t profile);
 struct ggml_metal_moe_profile_stats ggml_metal_moe_profile_get_stats(ggml_metal_moe_profile_t profile);
 bool ggml_metal_moe_profile_get_tensor_stats(
         ggml_metal_moe_profile_t profile,
