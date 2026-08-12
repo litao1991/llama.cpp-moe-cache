@@ -20,16 +20,23 @@ struct ggml_moe_cache_entry {
     std::list<uint64_t>::iterator position;
 };
 
+struct ggml_moe_cache_history {
+    uint32_t short_frequency = 0;
+    uint32_t long_frequency = 0;
+};
+
 struct ggml_moe_cache_policy::impl {
     impl(
             size_t capacity_bytes,
             uint32_t protected_percent,
             uint32_t admission_threshold,
-            uint64_t frequency_decay_interval) :
+            uint64_t frequency_decay_interval,
+            uint64_t short_frequency_decay_interval) :
         capacity(capacity_bytes),
         protected_target(capacity_bytes / 100 * protected_percent + capacity_bytes % 100 * protected_percent / 100),
         admission_threshold(std::max(1u, admission_threshold)),
-        frequency_decay_interval(frequency_decay_interval) {
+        frequency_decay_interval(frequency_decay_interval),
+        short_frequency_decay_interval(short_frequency_decay_interval) {
         assert(protected_percent <= 100);
     }
 
@@ -37,6 +44,7 @@ struct ggml_moe_cache_policy::impl {
     size_t protected_target;
     uint32_t admission_threshold;
     uint64_t frequency_decay_interval;
+    uint64_t short_frequency_decay_interval;
     uint64_t clock = 0;
     size_t resident = 0;
     size_t protected_size = 0;
@@ -47,29 +55,47 @@ struct ggml_moe_cache_policy::impl {
     std::list<uint64_t> probation;
     std::list<uint64_t> protected_lru;
     std::unordered_map<uint64_t, ggml_moe_cache_entry> entries;
-    std::unordered_map<uint64_t, uint32_t> frequencies;
+    std::unordered_map<uint64_t, ggml_moe_cache_history> histories;
 
     void decay_frequencies() {
-        if (frequency_decay_interval == 0 || clock % frequency_decay_interval != 0) {
+        const bool decay_short = short_frequency_decay_interval != 0 && clock % short_frequency_decay_interval == 0;
+        const bool decay_long = frequency_decay_interval != 0 && clock % frequency_decay_interval == 0;
+        if (!decay_short && !decay_long) {
             return;
         }
 
-        for (auto it = frequencies.begin(); it != frequencies.end();) {
-            it->second /= 2;
-            if (it->second == 0 && entries.find(it->first) == entries.end()) {
-                it = frequencies.erase(it);
+        for (auto it = histories.begin(); it != histories.end();) {
+            if (decay_short) {
+                it->second.short_frequency /= 2;
+            }
+            if (decay_long) {
+                it->second.long_frequency /= 2;
+            }
+            if (it->second.short_frequency == 0 && it->second.long_frequency == 0 && entries.find(it->first) == entries.end()) {
+                it = histories.erase(it);
             } else {
                 ++it;
             }
         }
     }
 
-    uint32_t record_frequency(uint64_t key) {
-        uint32_t & value = frequencies[key];
-        if (value != std::numeric_limits<uint32_t>::max()) {
-            ++value;
+    ggml_moe_cache_history record_frequency(uint64_t key) {
+        ggml_moe_cache_history & history = histories[key];
+        if (history.short_frequency != std::numeric_limits<uint32_t>::max()) {
+            ++history.short_frequency;
         }
-        return value;
+        if (history.long_frequency != std::numeric_limits<uint32_t>::max()) {
+            ++history.long_frequency;
+        }
+        return history;
+    }
+
+    uint64_t benefit(uint64_t key) const {
+        const auto it = histories.find(key);
+        if (it == histories.end()) {
+            return 0;
+        }
+        return (uint64_t) it->second.short_frequency * 4 + it->second.long_frequency;
     }
 
     void move_to_front(ggml_moe_cache_entry & entry, uint64_t key) {
@@ -192,6 +218,76 @@ struct ggml_moe_cache_policy::impl {
         return true;
     }
 
+    bool find_victim(uint64_t & key) {
+        const uint32_t group = most_over_budget_group();
+        auto probation_it = find_lru(probation, group);
+        auto protected_it = protected_lru.end();
+        if (probation_it == probation.end()) {
+            protected_it = find_lru(protected_lru, group);
+            if (protected_it == protected_lru.end()) {
+                probation_it = find_lru(probation, UINT32_MAX);
+                if (probation_it == probation.end()) {
+                    protected_it = find_lru(protected_lru, UINT32_MAX);
+                }
+            }
+        }
+        if (probation_it != probation.end()) {
+            key = *probation_it;
+            return true;
+        }
+        if (protected_it != protected_lru.end()) {
+            key = *protected_it;
+            return true;
+        }
+        return false;
+    }
+
+    bool cost_allows(uint64_t key, size_t size_bytes) {
+        if (size_bytes <= capacity - resident) {
+            return true;
+        }
+        uint64_t victim;
+        if (!find_victim(victim)) {
+            return false;
+        }
+        const auto victim_it = entries.find(victim);
+        assert(victim_it != entries.end());
+        return (long double) benefit(key) * victim_it->second.size_bytes * 4 >
+               (long double) benefit(victim) * size_bytes * 5;
+    }
+
+    ggml_moe_cache_result admit(uint64_t key, size_t size_bytes, uint32_t group) {
+        ggml_moe_cache_result result;
+        auto entry_it = entries.find(key);
+        if (entry_it != entries.end()) {
+            assert(entry_it->second.size_bytes == size_bytes);
+            assert(entry_it->second.group == group);
+            result.hit = true;
+            return result;
+        }
+        if (size_bytes == 0 || size_bytes > capacity) {
+            return result;
+        }
+
+        make_room(size_bytes, result.evicted);
+        probation.push_front(key);
+        entries.emplace(key, ggml_moe_cache_entry {
+            size_bytes,
+            group,
+            ggml_moe_cache_segment::probation,
+            probation.begin(),
+        });
+        probation_size += size_bytes;
+        resident += size_bytes;
+        if (group < group_resident.size()) {
+            group_resident[group] += size_bytes;
+        }
+        ++stats.admission_attempts;
+        ++stats.admissions;
+        result.admitted = true;
+        return result;
+    }
+
     void make_room(size_t size_bytes, std::vector<uint64_t> & evicted) {
         while (size_bytes > capacity - resident) {
             uint64_t key;
@@ -220,8 +316,9 @@ ggml_moe_cache_policy::ggml_moe_cache_policy(
         size_t capacity_bytes,
         uint32_t protected_percent,
         uint32_t admission_threshold,
-        uint64_t frequency_decay_interval) :
-    pimpl(new impl(capacity_bytes, protected_percent, admission_threshold, frequency_decay_interval)) {
+        uint64_t frequency_decay_interval,
+        uint64_t short_frequency_decay_interval) :
+    pimpl(new impl(capacity_bytes, protected_percent, admission_threshold, frequency_decay_interval, short_frequency_decay_interval)) {
 }
 
 ggml_moe_cache_policy::~ggml_moe_cache_policy() = default;
@@ -231,7 +328,7 @@ ggml_moe_cache_result ggml_moe_cache_policy::access(uint64_t key, size_t size_by
     ++pimpl->clock;
     ++pimpl->stats.accesses;
     pimpl->decay_frequencies();
-    const uint32_t frequency = pimpl->record_frequency(key);
+    const auto history = pimpl->record_frequency(key);
 
     auto entry_it = pimpl->entries.find(key);
     if (entry_it != pimpl->entries.end()) {
@@ -248,27 +345,39 @@ ggml_moe_cache_result ggml_moe_cache_policy::access(uint64_t key, size_t size_by
     }
 
     ++pimpl->stats.misses;
-    if (size_bytes == 0 || size_bytes > pimpl->capacity || frequency < pimpl->admission_threshold) {
+    if (size_bytes == 0 || size_bytes > pimpl->capacity ||
+            std::max(history.short_frequency, history.long_frequency) < pimpl->admission_threshold) {
+        return result;
+    }
+    if (!pimpl->cost_allows(key, size_bytes)) {
+        ++pimpl->stats.cost_rejections;
+        result.cost_rejected = true;
         return result;
     }
 
-    pimpl->make_room(size_bytes, result.evicted);
-    pimpl->probation.push_front(key);
-    pimpl->entries.emplace(key, ggml_moe_cache_entry {
-        size_bytes,
-        group,
-        ggml_moe_cache_segment::probation,
-        pimpl->probation.begin(),
-    });
-    pimpl->probation_size += size_bytes;
-    pimpl->resident += size_bytes;
-    if (group < pimpl->group_resident.size()) {
-        pimpl->group_resident[group] += size_bytes;
-    }
-    ++pimpl->stats.admission_attempts;
-    ++pimpl->stats.admissions;
-    result.admitted = true;
+    result = pimpl->admit(key, size_bytes, group);
     return result;
+}
+
+ggml_moe_cache_result ggml_moe_cache_policy::prefetch(uint64_t key, size_t size_bytes, uint32_t group, uint64_t predicted_benefit) {
+    if (pimpl->entries.find(key) != pimpl->entries.end()) {
+        return pimpl->admit(key, size_bytes, group);
+    }
+    if (predicted_benefit != UINT64_MAX && size_bytes > pimpl->capacity - pimpl->resident) {
+        uint64_t victim;
+        if (!pimpl->find_victim(victim)) {
+            return {};
+        }
+        const auto victim_it = pimpl->entries.find(victim);
+        assert(victim_it != pimpl->entries.end());
+        if ((long double) predicted_benefit * victim_it->second.size_bytes * 4 <=
+                (long double) pimpl->benefit(victim) * size_bytes * 5) {
+            ggml_moe_cache_result result;
+            result.cost_rejected = true;
+            return result;
+        }
+    }
+    return pimpl->admit(key, size_bytes, group);
 }
 
 bool ggml_moe_cache_policy::erase(uint64_t key) {
@@ -339,8 +448,13 @@ size_t ggml_moe_cache_policy::size() const {
 }
 
 uint32_t ggml_moe_cache_policy::frequency(uint64_t key) const {
-    const auto it = pimpl->frequencies.find(key);
-    return it == pimpl->frequencies.end() ? 0 : it->second;
+    const auto it = pimpl->histories.find(key);
+    return it == pimpl->histories.end() ? 0 : it->second.long_frequency;
+}
+
+uint32_t ggml_moe_cache_policy::short_frequency(uint64_t key) const {
+    const auto it = pimpl->histories.find(key);
+    return it == pimpl->histories.end() ? 0 : it->second.short_frequency;
 }
 
 const ggml_moe_cache_stats & ggml_moe_cache_policy::stats() const {
@@ -358,10 +472,11 @@ struct ggml_moe_cache_slots::impl {
             size_t alignment,
             uint32_t protected_percent,
             uint32_t admission_threshold,
-            uint64_t frequency_decay_interval) :
+            uint64_t frequency_decay_interval,
+            uint64_t short_frequency_decay_interval) :
         capacity(capacity_bytes),
         alignment(std::max((size_t) 1, alignment)),
-        policy(capacity_bytes, protected_percent, admission_threshold, frequency_decay_interval) {
+        policy(capacity_bytes, protected_percent, admission_threshold, frequency_decay_interval, short_frequency_decay_interval) {
         if (capacity > 0) {
             free_ranges.emplace(0, capacity);
         }
@@ -421,6 +536,63 @@ struct ggml_moe_cache_slots::impl {
         release(it->second.offset, it->second.size_bytes);
         slots.erase(it);
     }
+
+    ggml_moe_cache_slot_result finalize(
+            uint64_t key,
+            size_t allocation_size,
+            uint32_t group,
+            ggml_moe_cache_result policy_result) {
+        ggml_moe_cache_slot_result result;
+        result.hit = policy_result.hit;
+        result.cost_rejected = policy_result.cost_rejected;
+        result.evicted = std::move(policy_result.evicted);
+        if (result.hit) {
+            result.offset = slots.at(key).offset;
+            return result;
+        }
+        if (!policy_result.admitted) {
+            return result;
+        }
+        ++stats.admission_attempts;
+        for (uint64_t evicted : result.evicted) {
+            release_key(evicted);
+        }
+
+        size_t offset = allocate(allocation_size);
+        if (offset == SIZE_MAX) {
+            const bool erased = policy.erase(key);
+            assert(erased);
+            if (!erased) {
+                ++stats.allocation_failures;
+                return result;
+            }
+            while (offset == SIZE_MAX) {
+                uint64_t evicted;
+                if (!policy.evict(evicted)) {
+                    break;
+                }
+                release_key(evicted);
+                result.evicted.push_back(evicted);
+                offset = allocate(allocation_size);
+            }
+            if (offset != SIZE_MAX) {
+                const auto restored = policy.prefetch(key, allocation_size, group);
+                assert(restored.admitted && restored.evicted.empty());
+            }
+        }
+        stats.evictions += result.evicted.size();
+        if (offset == SIZE_MAX) {
+            policy.erase(key);
+            ++stats.allocation_failures;
+            return result;
+        }
+
+        slots.emplace(key, ggml_moe_cache_slot { offset, allocation_size });
+        ++stats.admissions;
+        result.admitted = true;
+        result.offset = offset;
+        return result;
+    }
 };
 
 ggml_moe_cache_slots::ggml_moe_cache_slots(
@@ -428,73 +600,31 @@ ggml_moe_cache_slots::ggml_moe_cache_slots(
         size_t alignment,
         uint32_t protected_percent,
         uint32_t admission_threshold,
-        uint64_t frequency_decay_interval) :
-    pimpl(new impl(capacity_bytes, alignment, protected_percent, admission_threshold, frequency_decay_interval)) {
+        uint64_t frequency_decay_interval,
+        uint64_t short_frequency_decay_interval) :
+    pimpl(new impl(capacity_bytes, alignment, protected_percent, admission_threshold, frequency_decay_interval, short_frequency_decay_interval)) {
 }
 
 ggml_moe_cache_slots::~ggml_moe_cache_slots() = default;
 
 ggml_moe_cache_slot_result ggml_moe_cache_slots::access(uint64_t key, size_t size_bytes, uint32_t group) {
-    ggml_moe_cache_slot_result result;
     const size_t allocation_size = pimpl->aligned_size(size_bytes);
     auto policy_result = pimpl->policy.access(key, allocation_size, group);
-    result.hit = policy_result.hit;
-    result.evicted = std::move(policy_result.evicted);
     ++pimpl->stats.accesses;
-
-    if (result.hit) {
+    if (policy_result.hit) {
         ++pimpl->stats.hits;
-        const auto it = pimpl->slots.find(key);
-        assert(it != pimpl->slots.end());
-        result.offset = it->second.offset;
-        return result;
+    } else {
+        ++pimpl->stats.misses;
+        pimpl->stats.cost_rejections += policy_result.cost_rejected;
     }
+    return pimpl->finalize(key, allocation_size, group, std::move(policy_result));
+}
 
-    ++pimpl->stats.misses;
-
-    if (!policy_result.admitted) {
-        return result;
-    }
-    ++pimpl->stats.admission_attempts;
-
-    for (uint64_t evicted : result.evicted) {
-        pimpl->release_key(evicted);
-    }
-
-    size_t offset = pimpl->allocate(allocation_size);
-    if (offset == SIZE_MAX) {
-        const bool erased = pimpl->policy.erase(key);
-        assert(erased);
-        if (!erased) {
-            ++pimpl->stats.allocation_failures;
-            return result;
-        }
-        while (offset == SIZE_MAX) {
-            uint64_t evicted;
-            if (!pimpl->policy.evict(evicted)) {
-                break;
-            }
-            pimpl->release_key(evicted);
-            result.evicted.push_back(evicted);
-            offset = pimpl->allocate(allocation_size);
-        }
-        if (offset != SIZE_MAX) {
-            const auto restored = pimpl->policy.access(key, allocation_size, group);
-            assert(restored.admitted && restored.evicted.empty());
-        }
-    }
-    pimpl->stats.evictions += result.evicted.size();
-    if (offset == SIZE_MAX) {
-        pimpl->policy.erase(key);
-        ++pimpl->stats.allocation_failures;
-        return result;
-    }
-
-    pimpl->slots.emplace(key, ggml_moe_cache_slot { offset, allocation_size });
-    ++pimpl->stats.admissions;
-    result.admitted = true;
-    result.offset = offset;
-    return result;
+ggml_moe_cache_slot_result ggml_moe_cache_slots::prefetch(uint64_t key, size_t size_bytes, uint32_t group, uint64_t predicted_benefit) {
+    const size_t allocation_size = pimpl->aligned_size(size_bytes);
+    auto policy_result = pimpl->policy.prefetch(key, allocation_size, group, predicted_benefit);
+    pimpl->stats.cost_rejections += policy_result.cost_rejected;
+    return pimpl->finalize(key, allocation_size, group, std::move(policy_result));
 }
 
 void ggml_moe_cache_slots::set_group_count(uint32_t group_count) {
@@ -544,4 +674,94 @@ size_t ggml_moe_cache_slots::group_resident_bytes(uint32_t group) const {
 
 const ggml_moe_cache_stats & ggml_moe_cache_slots::stats() const {
     return pimpl->stats;
+}
+
+struct ggml_moe_markov::impl {
+    impl(uint32_t state_count, uint32_t prediction_count) :
+        state_count(state_count),
+        prediction_count(prediction_count),
+        transitions((size_t) state_count * state_count, 0),
+        totals(state_count, 0) {
+    }
+
+    uint32_t state_count;
+    uint32_t prediction_count;
+    std::vector<uint16_t> transitions;
+    std::vector<uint32_t> totals;
+    std::vector<uint32_t> previous;
+};
+
+ggml_moe_markov::ggml_moe_markov(uint32_t state_count, uint32_t prediction_count) :
+    pimpl(new impl(state_count, prediction_count)) {
+}
+
+ggml_moe_markov::~ggml_moe_markov() = default;
+
+std::vector<ggml_moe_markov_prediction> ggml_moe_markov::observe(const std::vector<uint32_t> & states) {
+    if (states.empty()) {
+        return {};
+    }
+    const uint32_t valid = (uint32_t) std::count_if(states.begin(), states.end(), [&](uint32_t state) {
+        return state < pimpl->state_count;
+    });
+    for (uint32_t previous : pimpl->previous) {
+        if (previous >= pimpl->state_count) {
+            continue;
+        }
+        if (pimpl->totals[previous] > 32768) {
+            for (uint32_t next = 0; next < pimpl->state_count; ++next) {
+                pimpl->transitions[(size_t) previous * pimpl->state_count + next] /= 2;
+            }
+            pimpl->totals[previous] /= 2;
+        }
+        for (uint32_t current : states) {
+            if (current >= pimpl->state_count) {
+                continue;
+            }
+            uint16_t & count = pimpl->transitions[(size_t) previous * pimpl->state_count + current];
+            if (count != std::numeric_limits<uint16_t>::max()) {
+                ++count;
+            }
+        }
+        if (pimpl->totals[previous] <= std::numeric_limits<uint32_t>::max() - valid) {
+            pimpl->totals[previous] += valid;
+        } else {
+            pimpl->totals[previous] = std::numeric_limits<uint32_t>::max();
+        }
+    }
+
+    std::vector<ggml_moe_markov_prediction> ranked;
+    ranked.reserve(pimpl->state_count);
+    uint64_t total = 0;
+    for (uint32_t current : states) {
+        if (current < pimpl->state_count) {
+            total += pimpl->totals[current];
+        }
+    }
+    const uint32_t total_clamped = (uint32_t) std::min<uint64_t>(total, std::numeric_limits<uint32_t>::max());
+    for (uint32_t predicted = 0; predicted < pimpl->state_count; ++predicted) {
+        uint64_t count = 0;
+        for (uint32_t current : states) {
+            if (current < pimpl->state_count) {
+                count += pimpl->transitions[(size_t) current * pimpl->state_count + predicted];
+            }
+        }
+        if (count > 0) {
+            ranked.push_back({
+                predicted,
+                (uint32_t) std::min<uint64_t>(count, std::numeric_limits<uint32_t>::max()),
+                total_clamped,
+            });
+        }
+    }
+    std::sort(ranked.begin(), ranked.end(), [](const ggml_moe_markov_prediction & a, const ggml_moe_markov_prediction & b) {
+        const uint64_t a_score = (uint64_t) a.count * b.total;
+        const uint64_t b_score = (uint64_t) b.count * a.total;
+        return a_score != b_score ? a_score > b_score : a.state < b.state;
+    });
+    if (ranked.size() > pimpl->prediction_count) {
+        ranked.resize(pimpl->prediction_count);
+    }
+    pimpl->previous = states;
+    return ranked;
 }

@@ -42,7 +42,7 @@ static void test_frequency_admission() {
 }
 
 static void test_slru_protects_reused_entries() {
-    ggml_moe_cache_policy cache(4, 50, 1);
+    ggml_moe_cache_policy cache(4, 50, 1, 4096, 1);
 
     cache.access(1, 1);
     cache.access(2, 1);
@@ -71,7 +71,7 @@ static void test_slru_protects_reused_entries() {
 }
 
 static void test_weighted_eviction() {
-    ggml_moe_cache_policy cache(10, 80, 1);
+    ggml_moe_cache_policy cache(10, 80, 1, 4096, 1);
 
     cache.access(1, 6);
     cache.access(2, 4);
@@ -151,7 +151,7 @@ static void test_slot_fragmentation_recovery() {
 }
 
 static void test_group_soft_budget() {
-    ggml_moe_cache_slots cache(12, 1, 80, 1);
+    ggml_moe_cache_slots cache(12, 1, 80, 1, 4096, 1);
     cache.set_group_count(3);
 
     cache.access(1, 4, 1);
@@ -171,6 +171,82 @@ static void test_group_soft_budget() {
     assert(cache.group_resident_bytes(2) == 4);
 }
 
+static void test_cost_aware_admission() {
+    ggml_moe_cache_policy cache(8, 80, 2, 0, 0);
+
+    cache.access(1, 8);
+    cache.access(1, 8);
+    for (int i = 0; i < 6; ++i) {
+        cache.access(1, 8);
+    }
+
+    cache.access(2, 8);
+    const auto rejected = cache.access(2, 8);
+    assert(rejected.cost_rejected);
+    assert(!rejected.admitted);
+    assert(cache.contains(1));
+    assert(!cache.contains(2));
+    assert(cache.stats().cost_rejections == 1);
+
+    for (int i = 0; i < 12; ++i) {
+        cache.access(2, 8);
+    }
+    assert(cache.contains(2));
+    assert(!cache.contains(1));
+}
+
+static void test_frequency_windows() {
+    ggml_moe_cache_policy cache(8, 80, 2, 8, 2);
+
+    cache.access(1, 1);
+    cache.access(1, 1);
+    assert(cache.short_frequency(1) == 1);
+    assert(cache.frequency(1) == 2);
+    cache.access(1, 1);
+    cache.access(1, 1);
+    assert(cache.short_frequency(1) == 2);
+    assert(cache.frequency(1) == 4);
+}
+
+static void test_markov_prediction() {
+    ggml_moe_markov markov(4, 2);
+
+    assert(markov.observe({ 1 }).empty());
+    assert(markov.observe({ 2 }).empty());
+    auto predictions = markov.observe({ 1 });
+    assert(predictions.size() == 1);
+    assert(predictions[0].state == 2);
+    assert(predictions[0].count == 1);
+    assert(predictions[0].total == 1);
+    markov.observe({ 3 });
+    predictions = markov.observe({ 1 });
+    assert(predictions.size() == 2);
+    assert(predictions[0].state == 2);
+    assert(predictions[1].state == 3);
+    assert(predictions[0].total == 2);
+}
+
+static void test_prefetch_does_not_count_as_access() {
+    ggml_moe_cache_slots cache(4, 1, 80, 2);
+
+    auto result = cache.prefetch(1, 4);
+    assert(result.admitted);
+    assert(cache.contains(1));
+    assert(cache.stats().accesses == 0);
+    assert(cache.stats().admissions == 1);
+
+    result = cache.prefetch(1, 4, UINT32_MAX, 0);
+    assert(result.hit);
+    assert(!result.cost_rejected);
+    assert(cache.stats().accesses == 0);
+    assert(cache.stats().admissions == 1);
+
+    result = cache.access(1, 4);
+    assert(result.hit);
+    assert(cache.stats().accesses == 1);
+    assert(cache.stats().hits == 1);
+}
+
 int main() {
     test_frequency_admission();
     test_slru_protects_reused_entries();
@@ -179,5 +255,9 @@ int main() {
     test_slot_alignment_and_coalescing();
     test_slot_fragmentation_recovery();
     test_group_soft_budget();
+    test_cost_aware_admission();
+    test_frequency_windows();
+    test_markov_prediction();
+    test_prefetch_does_not_count_as_access();
     return 0;
 }

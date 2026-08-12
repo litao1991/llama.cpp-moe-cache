@@ -11,19 +11,22 @@ struct ggml_moe_cache_stats {
     uint64_t misses              = 0;
     uint64_t admission_attempts  = 0;
     uint64_t admissions          = 0;
+    uint64_t cost_rejections     = 0;
     uint64_t allocation_failures = 0;
     uint64_t evictions           = 0;
 };
 
 struct ggml_moe_cache_result {
-    bool hit      = false;
-    bool admitted = false;
+    bool hit           = false;
+    bool admitted      = false;
+    bool cost_rejected = false;
     std::vector<uint64_t> evicted;
 };
 
 struct ggml_moe_cache_slot_result {
-    bool hit      = false;
-    bool admitted = false;
+    bool hit           = false;
+    bool admitted      = false;
+    bool cost_rejected = false;
     size_t offset = SIZE_MAX;
     std::vector<uint64_t> evicted;
 };
@@ -34,13 +37,15 @@ public:
             size_t capacity_bytes,
             uint32_t protected_percent = 80,
             uint32_t admission_threshold = 2,
-            uint64_t frequency_decay_interval = 4096);
+            uint64_t frequency_decay_interval = 4096,
+            uint64_t short_frequency_decay_interval = 256);
     ~ggml_moe_cache_policy();
 
     ggml_moe_cache_policy(const ggml_moe_cache_policy &) = delete;
     ggml_moe_cache_policy & operator=(const ggml_moe_cache_policy &) = delete;
 
     ggml_moe_cache_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX);
+    ggml_moe_cache_result prefetch(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, uint64_t predicted_benefit = UINT64_MAX);
     bool erase(uint64_t key);
     bool evict(uint64_t & key);
     void set_group_count(uint32_t group_count);
@@ -53,6 +58,7 @@ public:
     size_t group_resident_bytes(uint32_t group) const;
     size_t size() const;
     uint32_t frequency(uint64_t key) const;
+    uint32_t short_frequency(uint64_t key) const;
     const ggml_moe_cache_stats & stats() const;
 
 private:
@@ -67,13 +73,15 @@ public:
             size_t alignment,
             uint32_t protected_percent = 80,
             uint32_t admission_threshold = 2,
-            uint64_t frequency_decay_interval = 4096);
+            uint64_t frequency_decay_interval = 4096,
+            uint64_t short_frequency_decay_interval = 256);
     ~ggml_moe_cache_slots();
 
     ggml_moe_cache_slots(const ggml_moe_cache_slots &) = delete;
     ggml_moe_cache_slots & operator=(const ggml_moe_cache_slots &) = delete;
 
     ggml_moe_cache_slot_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX);
+    ggml_moe_cache_slot_result prefetch(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, uint64_t predicted_benefit = UINT64_MAX);
     bool erase(uint64_t key);
     void set_group_count(uint32_t group_count);
     void reset_stats();
@@ -85,6 +93,27 @@ public:
     size_t largest_free_range() const;
     size_t group_resident_bytes(uint32_t group) const;
     const ggml_moe_cache_stats & stats() const;
+
+private:
+    struct impl;
+    std::unique_ptr<impl> pimpl;
+};
+
+struct ggml_moe_markov_prediction {
+    uint32_t state;
+    uint32_t count;
+    uint32_t total;
+};
+
+class ggml_moe_markov {
+public:
+    ggml_moe_markov(uint32_t state_count, uint32_t prediction_count = 2);
+    ~ggml_moe_markov();
+
+    ggml_moe_markov(const ggml_moe_markov &) = delete;
+    ggml_moe_markov & operator=(const ggml_moe_markov &) = delete;
+
+    std::vector<ggml_moe_markov_prediction> observe(const std::vector<uint32_t> & states);
 
 private:
     struct impl;
