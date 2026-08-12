@@ -6,6 +6,7 @@
 #import "ggml-metal-impl.h"
 #import "ggml-metal-common.h"
 #import "ggml-metal-moe-cache.h"
+#import "ggml-metal-moe-profile.h"
 #import "ggml-metal-ops.h"
 
 #import <Foundation/Foundation.h>
@@ -82,6 +83,7 @@ struct ggml_metal {
     bool has_error;
 
     ggml_metal_moe_cache_t moe_cache;
+    ggml_metal_moe_profile_t moe_profile;
 };
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
@@ -174,6 +176,7 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
     res->has_error = false;
     res->moe_cache = NULL;
+    res->moe_profile = NULL;
 
     res->gf = nil;
     res->encode_async = nil;
@@ -195,6 +198,9 @@ void ggml_metal_free(ggml_metal_t ctx) {
 
     if (ctx->moe_cache) {
         ggml_metal_moe_cache_free(ctx->moe_cache);
+    }
+    if (ctx->moe_profile) {
+        ggml_metal_moe_profile_free(ctx->moe_profile);
     }
 
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
@@ -250,6 +256,7 @@ bool ggml_metal_set_moe_cache(ggml_metal_t ctx, size_t capacity_bytes) {
     }
 
     ggml_metal_synchronize(ctx);
+    ggml_metal_moe_profile_finish(ctx->moe_profile);
     if (ctx->moe_cache) {
         ggml_metal_moe_cache_free(ctx->moe_cache);
         ctx->moe_cache = NULL;
@@ -267,6 +274,27 @@ bool ggml_metal_set_moe_cache(ggml_metal_t ctx, size_t capacity_bytes) {
 
     GGML_LOG_INFO("%s: allocated %.2f MiB expert cache\n", __func__, capacity_bytes / 1024.0 / 1024.0);
     return true;
+}
+
+bool ggml_metal_set_moe_profile(ggml_metal_t ctx, bool enabled) {
+    ggml_metal_synchronize(ctx);
+    if (ctx->moe_profile) {
+        ggml_metal_moe_profile_finish(ctx->moe_profile);
+        ggml_metal_moe_profile_free(ctx->moe_profile);
+        ctx->moe_profile = NULL;
+    }
+
+    if (!enabled) {
+        return true;
+    }
+
+    ctx->moe_profile = ggml_metal_moe_profile_init(ctx->dev);
+    return ctx->moe_profile != NULL;
+}
+
+void ggml_metal_reset_moe_profile(ggml_metal_t ctx) {
+    ggml_metal_synchronize(ctx);
+    ggml_metal_moe_profile_reset(ctx->moe_profile);
 }
 
 void ggml_metal_synchronize(ggml_metal_t ctx) {
@@ -731,6 +759,7 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->dev,
             cmd_buf,
             ctx->moe_cache,
+            ctx->moe_profile,
             ctx->gf,
             idx_start,
             idx_end,

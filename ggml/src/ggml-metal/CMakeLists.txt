@@ -11,6 +11,7 @@ ggml_add_backend_library(ggml-metal
                          ggml-metal-common.cpp
                          ggml-metal-context.m
                          ggml-metal-moe-cache.cpp
+                         ggml-metal-moe-profile.cpp
                          ggml-metal-ops.cpp
                         )
 

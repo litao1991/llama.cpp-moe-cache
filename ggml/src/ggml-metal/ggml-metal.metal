@@ -10388,6 +10388,7 @@ kernel void kernel_mul_mm_id_map0(
         device  const char * src2,
         device        char * htpe,
         device        char * hids,
+        device atomic_uint * moe_profile,
         threadgroup   char * shmem [[threadgroup(0)]],
         ushort tpitg[[thread_position_in_threadgroup]],
         ushort   ntg[[threads_per_threadgroup]]) {
@@ -10434,6 +10435,9 @@ kernel void kernel_mul_mm_id_map0(
 
     device uint32_t * tpe_u32 = (device uint32_t *) (htpe);
     tpe_u32[ide] = n_all;
+    if (args.moe_profile) {
+        atomic_fetch_add_explicit(moe_profile + ide, n_all, memory_order_relaxed);
+    }
 }
 
 typedef decltype(kernel_mul_mm_id_map0<1>) kernel_mul_mm_id_map0_t;
@@ -10933,6 +10937,7 @@ kernel void kernel_mul_mv_id(
         device const char * moe_weights,
         device const uint64_t * moe_page_table,
         device atomic_uint * moe_access,
+        device atomic_uint * moe_profile,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiitg[[thread_index_in_threadgroup]],
@@ -10944,6 +10949,10 @@ kernel void kernel_mul_mv_id(
     tgpig.z = 0;
 
     const int32_t i02 = ((device const int32_t *) (ids + iid1*args.nbi1))[idx];
+
+    if (args.moe_profile && tgpig.x == 0 && tgpig.y == 0 && tiitg == 0) {
+        atomic_fetch_add_explicit(moe_profile + i02, 1, memory_order_relaxed);
+    }
 
     const int64_t i11 = idx % args.ne11;
     const int64_t i12 = iid1;

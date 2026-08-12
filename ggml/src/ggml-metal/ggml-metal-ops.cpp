@@ -30,6 +30,7 @@ struct ggml_metal_op {
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
         ggml_metal_moe_cache_t moe_cache,
+        ggml_metal_moe_profile_t moe_profile,
         ggml_cgraph * gf,
         int  idx_start,
         int  idx_end,
@@ -50,6 +51,7 @@ struct ggml_metal_op {
         this->debug_graph     = debug_graph;
         this->debug_fusion    = debug_fusion;
         this->moe_cache       = moe_cache;
+        this->moe_profile     = moe_profile;
         this->gf              = gf;
 
         idxs.reserve(gf->n_nodes);
@@ -95,6 +97,7 @@ struct ggml_metal_op {
     ggml_metal_encoder_t enc;
     ggml_mem_ranges_t    mem_ranges;
     ggml_metal_moe_cache_t moe_cache;
+    ggml_metal_moe_profile_t moe_profile;
 
     bool use_fusion;
     bool use_concurrency;
@@ -117,6 +120,7 @@ ggml_metal_op_t ggml_metal_op_init(
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
         ggml_metal_moe_cache_t moe_cache,
+        ggml_metal_moe_profile_t moe_profile,
         ggml_cgraph * gf,
         int idx_start,
         int idx_end,
@@ -129,6 +133,7 @@ ggml_metal_op_t ggml_metal_op_init(
         dev,
         cmd_buf,
         moe_cache,
+        moe_profile,
         gf,
         idx_start,
         idx_end,
@@ -2591,6 +2596,9 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     const uint32_t r2 = 1;
     const uint32_t r3 = 1;
 
+    const ggml_metal_moe_profile_bindings moe_profile =
+            ggml_metal_moe_profile_get_bindings(ctx->moe_profile, op->src[0]);
+
     // find the break-even point where the matrix-matrix kernel becomes more efficient compared
     // to the matrix-vector kernel
     // ne20 = n_used_experts
@@ -2624,6 +2632,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
                 ne21, // n_tokens
                 ne20, // n_expert_used
                 nb21,
+                moe_profile.enabled,
             };
 
             auto pipeline = ggml_metal_library_get_pipeline_mul_mm_id_map0(lib, ne02, ne20);
@@ -2639,6 +2648,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer  (enc, bid_src2, 1);
             ggml_metal_encoder_set_buffer  (enc, bid_tpe,  2);
             ggml_metal_encoder_set_buffer  (enc, bid_ids,  3);
+            ggml_metal_encoder_set_buffer  (enc, moe_profile.enabled ? moe_profile.counts : bid_src0, 4);
 
             ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
@@ -2720,6 +2730,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             /*.nb1  =*/ nb1,
             /*.nr0  =*/ nr0,
             /*.moe_cache =*/ moe_cache.enabled,
+            /*.moe_profile =*/ moe_profile.enabled,
         };
 
         if (ggml_is_quantized(op->src[0]->type)) {
@@ -2735,6 +2746,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer(enc, moe_cache.enabled ? moe_cache.weights    : bid_src0, 5);
         ggml_metal_encoder_set_buffer(enc, moe_cache.enabled ? moe_cache.page_table : bid_src0, 6);
         ggml_metal_encoder_set_buffer(enc, moe_cache.enabled ? moe_cache.access     : bid_src0, 7);
+        ggml_metal_encoder_set_buffer(enc, moe_profile.enabled ? moe_profile.counts : bid_src0, 8);
 
         const int64_t _ne1 = 1;
         const int64_t ne123 = ne20*ne21;

@@ -46,6 +46,8 @@ GGML_BACKEND_API bool ggml_backend_is_metal(ggml_backend_t backend);
 
 GGML_BACKEND_API void ggml_backend_metal_set_abort_callback(ggml_backend_t backend, ggml_abort_callback abort_callback, void * user_data);
 GGML_BACKEND_API bool ggml_backend_metal_set_moe_cache(ggml_backend_t backend, size_t capacity_bytes);
+GGML_BACKEND_API bool ggml_backend_metal_set_moe_profile(ggml_backend_t backend, bool enabled);
+GGML_BACKEND_API void ggml_backend_metal_reset_moe_profile(ggml_backend_t backend);
 
 // helper to check if the device supports a specific family
 // ideally, the user code should be doing these checks

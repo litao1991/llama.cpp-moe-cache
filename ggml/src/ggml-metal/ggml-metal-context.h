@@ -34,6 +34,8 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx);
 void ggml_metal_set_n_cb            (ggml_metal_t ctx, int n_cb);
 void ggml_metal_set_abort_callback  (ggml_metal_t ctx, ggml_abort_callback abort_callback, void * user_data);
 bool ggml_metal_set_moe_cache       (ggml_metal_t ctx, size_t capacity_bytes);
+bool ggml_metal_set_moe_profile     (ggml_metal_t ctx, bool enabled);
+void ggml_metal_reset_moe_profile   (ggml_metal_t ctx);
 bool ggml_metal_supports_family     (ggml_metal_t ctx, int family);
 void ggml_metal_capture_next_compute(ggml_metal_t ctx);
 

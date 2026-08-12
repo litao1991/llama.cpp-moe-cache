@@ -360,6 +360,14 @@ llama_context::llama_context(
                     auto fn = (moe_cache_set_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_moe_cache");
                     if (fn) {
                         moe_cache_backends.emplace_back(backend.get(), fn);
+
+                        auto profile_set = (moe_profile_set_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_moe_profile");
+                        auto profile_reset = (moe_profile_reset_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_reset_moe_profile");
+                        if (profile_set && profile_reset && profile_set(backend.get(), true)) {
+                            moe_profile_backends.emplace_back(backend.get(), profile_reset);
+                        } else {
+                            LLAMA_LOG_WARN("%s: failed to enable Metal MoE prefill route profile\n", __func__);
+                        }
                     }
                 }
             }
@@ -1817,6 +1825,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     const uint32_t n_tokens_all  = balloc->get_n_tokens();
     const uint32_t n_outputs_all = balloc->get_n_outputs();
+
+    if (moe_cache_pending && n_tokens_all > 1) {
+        const llama_batch & batch = balloc->get_batch();
+        const bool starts_at_zero = std::any_of(batch.pos, batch.pos + batch.n_tokens, [](llama_pos pos) { return pos == 0; });
+        if (starts_at_zero) {
+            for (const auto & item : moe_profile_backends) {
+                item.second(item.first);
+            }
+        }
+    }
 
     if (moe_cache_pending && n_tokens_all == 1) {
         moe_cache_init();

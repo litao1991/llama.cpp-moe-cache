@@ -351,7 +351,10 @@ private:
     std::vector<ggml_backend_ptr> backends;
 
     using moe_cache_set_fn = bool (*)(ggml_backend_t backend, size_t capacity_bytes);
+    using moe_profile_set_fn = bool (*)(ggml_backend_t backend, bool enabled);
+    using moe_profile_reset_fn = void (*)(ggml_backend_t backend);
     std::vector<std::pair<ggml_backend_t, moe_cache_set_fn>> moe_cache_backends;
+    std::vector<std::pair<ggml_backend_t, moe_profile_reset_fn>> moe_profile_backends;
     bool moe_cache_pending = false;
 
     // training
