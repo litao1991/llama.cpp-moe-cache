@@ -1258,6 +1258,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     const bool use_mlock      = params.load_mode == LLAMA_LOAD_MODE_MLOCK || params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK;
     const auto & tensor_split = params.tensor_split;
 
+    if (params.moe_cache_bytes > 0 && use_mlock) {
+        throw std::invalid_argument("MoE expert caching is not compatible with mlock");
+    }
+
     const int n_layer_all = hparams.n_layer_all;
     const int n_gpu_layers = this->n_gpu_layers();
 
@@ -1529,7 +1533,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr, params.moe_cache_bytes == 0);
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -1713,6 +1717,10 @@ uint32_t llama_model::n_gpu_layers() const {
 
 llama_split_mode llama_model::split_mode() const {
     return params.split_mode;
+}
+
+size_t llama_model::moe_cache_bytes() const {
+    return params.moe_cache_bytes;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
@@ -2448,6 +2456,7 @@ llama_model_params llama_model_default_params() {
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
+        /*.moe_cache_bytes             =*/ 0,
         /*.vocab_only                  =*/ false,
         /*.check_tensors               =*/ false,
         /*.use_extra_bufts             =*/ true,

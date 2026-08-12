@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml-metal-device.h"
+#include "ggml-metal-moe-cache.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -11,6 +12,7 @@ typedef struct ggml_metal_op * ggml_metal_op_t;
 ggml_metal_op_t ggml_metal_op_init(
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
+        ggml_metal_moe_cache_t moe_cache,
         struct ggml_cgraph * gf,
         int  idx_start,
         int  idx_end,

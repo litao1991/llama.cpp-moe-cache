@@ -1337,11 +1337,53 @@ void llama_model_loader::done_getting_tensors(bool partial) const {
     }
 }
 
-void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps) {
+static bool llama_model_loader_is_moe_expert(const std::string & name) {
+    static const char * const patterns[] = {
+        ".ffn_gate_exps",
+        ".ffn_gate_up_exps",
+        ".ffn_down_exps",
+        ".ffn_up_exps",
+        ".ffn_gate_chexps",
+        ".ffn_down_chexps",
+        ".ffn_up_chexps",
+    };
+
+    for (const char * pattern : patterns) {
+        if (name.find(pattern) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps, bool prefetch_experts) {
     if (use_mmap) {
+        std::vector<std::vector<std::pair<size_t, size_t>>> expert_ranges(files.size());
+        if (prefetch && !prefetch_experts) {
+            for (const auto & item : weights_map) {
+                const auto & weight = item.second;
+                if (llama_model_loader_is_moe_expert(item.first)) {
+                    expert_ranges[weight.idx].emplace_back(weight.offs, weight.offs + ggml_nbytes(weight.tensor));
+                }
+            }
+            for (auto & ranges : expert_ranges) {
+                std::sort(ranges.begin(), ranges.end());
+                size_t write = 0;
+                for (const auto & range : ranges) {
+                    if (write > 0 && range.first <= ranges[write - 1].second) {
+                        ranges[write - 1].second = std::max(ranges[write - 1].second, range.second);
+                    } else {
+                        ranges[write++] = range;
+                    }
+                }
+                ranges.resize(write);
+            }
+        }
+
         mappings.reserve(files.size());
         mmaps_used.reserve(files.size());
-        for (const auto & file : files) {
+        for (size_t i = 0; i < files.size(); ++i) {
+            const auto & file = files[i];
             bool is_numa = false;
 
             auto * dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
@@ -1353,7 +1395,20 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
                 }
             }
 
-            std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), prefetch ? -1 : 0, is_numa);
+            const auto & ranges = expert_ranges[i];
+            std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), prefetch && ranges.empty() ? -1 : 0, is_numa);
+            if (prefetch && !ranges.empty()) {
+                size_t cursor = 0;
+                size_t expert_bytes = 0;
+                for (const auto & range : ranges) {
+                    mapping->prefetch_range(cursor, range.first);
+                    mapping->advise_random(range.first, range.second);
+                    cursor = range.second;
+                    expert_bytes += range.second - range.first;
+                }
+                mapping->prefetch_range(cursor, mapping->size());
+                LLAMA_LOG_INFO("%s: deferred prefetch for %.2f MiB of MoE expert weights\n", __func__, expert_bytes / 1024.0 / 1024.0);
+            }
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());

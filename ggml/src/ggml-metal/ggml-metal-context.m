@@ -5,6 +5,7 @@
 
 #import "ggml-metal-impl.h"
 #import "ggml-metal-common.h"
+#import "ggml-metal-moe-cache.h"
 #import "ggml-metal-ops.h"
 
 #import <Foundation/Foundation.h>
@@ -79,6 +80,8 @@ struct ggml_metal {
     // error state - set when a command buffer fails during synchronize
     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
     bool has_error;
+
+    ggml_metal_moe_cache_t moe_cache;
 };
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
@@ -170,6 +173,7 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     }
 
     res->has_error = false;
+    res->moe_cache = NULL;
 
     res->gf = nil;
     res->encode_async = nil;
@@ -188,6 +192,10 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
 void ggml_metal_free(ggml_metal_t ctx) {
     GGML_LOG_INFO("%s: deallocating\n", __func__);
+
+    if (ctx->moe_cache) {
+        ggml_metal_moe_cache_free(ctx->moe_cache);
+    }
 
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
         if (ctx->cmd_bufs[i].obj) {
@@ -234,6 +242,31 @@ void ggml_metal_free(ggml_metal_t ctx) {
 
 const char * ggml_metal_get_name(ggml_metal_t ctx) {
     return ctx->name;
+}
+
+bool ggml_metal_set_moe_cache(ggml_metal_t ctx, size_t capacity_bytes) {
+    if (ctx->moe_cache && ggml_metal_moe_cache_get_capacity(ctx->moe_cache) == capacity_bytes) {
+        return true;
+    }
+
+    ggml_metal_synchronize(ctx);
+    if (ctx->moe_cache) {
+        ggml_metal_moe_cache_free(ctx->moe_cache);
+        ctx->moe_cache = NULL;
+    }
+
+    if (capacity_bytes == 0) {
+        return true;
+    }
+
+    ctx->moe_cache = ggml_metal_moe_cache_init(ctx->dev, capacity_bytes);
+    if (!ctx->moe_cache) {
+        GGML_LOG_ERROR("%s: failed to allocate %.2f MiB\n", __func__, capacity_bytes / 1024.0 / 1024.0);
+        return false;
+    }
+
+    GGML_LOG_INFO("%s: allocated %.2f MiB expert cache\n", __func__, capacity_bytes / 1024.0 / 1024.0);
+    return true;
 }
 
 void ggml_metal_synchronize(ggml_metal_t ctx) {
@@ -292,6 +325,8 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
 
         [ctx->cmd_bufs_ext removeAllObjects];
     }
+
+    ggml_metal_moe_cache_update(ctx->moe_cache);
 }
 
 static struct ggml_metal_buffer_id ggml_metal_get_buffer_id(const struct ggml_tensor * t) {
@@ -695,6 +730,7 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
         ggml_metal_op_t ctx_op = ggml_metal_op_init(
             ctx->dev,
             cmd_buf,
+            ctx->moe_cache,
             ctx->gf,
             idx_start,
             idx_end,

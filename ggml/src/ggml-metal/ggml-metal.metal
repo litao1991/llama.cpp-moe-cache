@@ -10930,6 +10930,9 @@ kernel void kernel_mul_mv_id(
         device const char * src1,
         device       char * dst,
         device const char * ids,
+        device const char * moe_weights,
+        device const uint64_t * moe_page_table,
+        device atomic_uint * moe_access,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiitg[[thread_index_in_threadgroup]],
@@ -10949,6 +10952,15 @@ kernel void kernel_mul_mv_id(
     const int64_t i2 = i12;
 
     device const char * src0_cur = src0s + i02*args.nb02;
+    if (args.moe_cache) {
+        const uint64_t offset = moe_page_table[i02];
+        if (offset != ~uint64_t(0)) {
+            src0_cur = moe_weights + offset;
+        }
+        if (tiitg == 0) {
+            atomic_store_explicit(moe_access + i02, 1, memory_order_relaxed);
+        }
+    }
     device const char * src1_cur = src1  + i11*args.nb11 + i12*args.nb12;
 
     device char * dst_cur = dst + (i1*args.ne0 + i2*args.ne1*args.ne0)*sizeof(float);

@@ -1076,7 +1076,7 @@ void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_eve
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total) {
     if (@available(macOS 10.12, iOS 16.0, *)) {
         *total = dev->mtl_device.recommendedMaxWorkingSetSize;
-        *free  = *total - dev->mtl_device.currentAllocatedSize;
+        *free  = dev->mtl_device.currentAllocatedSize < *total ? *total - dev->mtl_device.currentAllocatedSize : 0;
     } else {
         *free = 0;
         *total = 0;
@@ -1814,6 +1814,14 @@ void * ggml_metal_buffer_get_base(ggml_metal_buffer_t buf) {
 
 bool ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf) {
     return buf->is_shared;
+}
+
+struct ggml_metal_buffer_id ggml_metal_buffer_get_base_id(ggml_metal_buffer_t buf) {
+    if (!buf || buf->n_buffers != 1) {
+        return (struct ggml_metal_buffer_id) { nil, 0 };
+    }
+
+    return (struct ggml_metal_buffer_id) { buf->buffers[0].metal, 0 };
 }
 
 void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {

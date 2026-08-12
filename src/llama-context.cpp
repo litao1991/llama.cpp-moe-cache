@@ -352,6 +352,27 @@ llama_context::llama_context(
         }
         backends.emplace_back(backend_cpu);
 
+        if (model.moe_cache_bytes() > 0) {
+            for (auto & backend : backends) {
+                ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
+                ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+                if (reg) {
+                    auto fn = (moe_cache_set_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_moe_cache");
+                    if (fn) {
+                        moe_cache_backends.emplace_back(backend.get(), fn);
+                    }
+                }
+            }
+
+            if (moe_cache_backends.empty()) {
+                LLAMA_LOG_WARN("%s: MoE expert cache requested but no Metal backend is active\n", __func__);
+            } else {
+                moe_cache_pending = true;
+                LLAMA_LOG_INFO("%s: deferring %.2f MiB MoE expert cache allocation until decode\n",
+                        __func__, model.moe_cache_bytes() / 1024.0 / 1024.0);
+            }
+        }
+
         // create a list of the set_n_threads functions in the backends
         for (auto & backend : backends) {
             ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
@@ -470,6 +491,45 @@ llama_context::llama_context(
         sampling.token_ids_full_vocab.resize(n_vocab);
         for (int i = 0; i < n_vocab; ++i) {
             sampling.token_ids_full_vocab[i] = i;
+        }
+    }
+}
+
+void llama_context::moe_cache_init() {
+    static constexpr size_t alignment     = 256ull * 1024 * 1024;
+    static constexpr size_t reserve_floor = 1024ull * 1024 * 1024;
+
+    moe_cache_pending = false;
+
+    const size_t requested = model.moe_cache_bytes() / moe_cache_backends.size();
+    for (const auto & item : moe_cache_backends) {
+        ggml_backend_dev_t dev = ggml_backend_get_device(item.first);
+
+        ggml_backend_synchronize(item.first);
+
+        size_t free  = 0;
+        size_t total = 0;
+        ggml_backend_dev_memory(dev, &free, &total);
+
+        const size_t reserve = std::max(reserve_floor, total / 16);
+        const size_t safe    = free > reserve ? (free - reserve) / alignment * alignment : 0;
+        size_t capacity      = std::min(requested, safe);
+
+        LLAMA_LOG_INFO("%s: requested = %.2f MiB, available = %.2f MiB, reserve = %.2f MiB, initial = %.2f MiB\n",
+                __func__, requested / 1024.0 / 1024.0, free / 1024.0 / 1024.0,
+                reserve / 1024.0 / 1024.0, capacity / 1024.0 / 1024.0);
+
+        while (capacity >= alignment && !item.second(item.first, capacity)) {
+            capacity = (capacity / 2) / alignment * alignment;
+            LLAMA_LOG_WARN("%s: retrying MoE expert cache allocation with %.2f MiB\n",
+                    __func__, capacity / 1024.0 / 1024.0);
+        }
+
+        if (capacity < alignment) {
+            LLAMA_LOG_WARN("%s: MoE expert cache disabled because no safe capacity is available\n", __func__);
+        } else {
+            LLAMA_LOG_INFO("%s: MoE expert cache active capacity = %.2f MiB\n",
+                    __func__, capacity / 1024.0 / 1024.0);
         }
     }
 }
@@ -1757,6 +1817,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     const uint32_t n_tokens_all  = balloc->get_n_tokens();
     const uint32_t n_outputs_all = balloc->get_n_outputs();
+
+    if (moe_cache_pending && n_tokens_all == 1) {
+        moe_cache_init();
+    }
 
     if (output_all) {
         // require that all tokens are output

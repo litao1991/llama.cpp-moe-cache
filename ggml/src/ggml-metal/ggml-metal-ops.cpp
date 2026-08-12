@@ -29,6 +29,7 @@ struct ggml_metal_op {
     ggml_metal_op(
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
+        ggml_metal_moe_cache_t moe_cache,
         ggml_cgraph * gf,
         int  idx_start,
         int  idx_end,
@@ -48,6 +49,7 @@ struct ggml_metal_op {
         this->use_capture     = use_capture;
         this->debug_graph     = debug_graph;
         this->debug_fusion    = debug_fusion;
+        this->moe_cache       = moe_cache;
         this->gf              = gf;
 
         idxs.reserve(gf->n_nodes);
@@ -92,6 +94,7 @@ struct ggml_metal_op {
     ggml_metal_library_t lib;
     ggml_metal_encoder_t enc;
     ggml_mem_ranges_t    mem_ranges;
+    ggml_metal_moe_cache_t moe_cache;
 
     bool use_fusion;
     bool use_concurrency;
@@ -113,6 +116,7 @@ private:
 ggml_metal_op_t ggml_metal_op_init(
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
+        ggml_metal_moe_cache_t moe_cache,
         ggml_cgraph * gf,
         int idx_start,
         int idx_end,
@@ -124,6 +128,7 @@ ggml_metal_op_t ggml_metal_op_init(
     ggml_metal_op_t res = new ggml_metal_op(
         dev,
         cmd_buf,
+        moe_cache,
         gf,
         idx_start,
         idx_end,
@@ -2682,6 +2687,11 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     } else {
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_id(lib, op);
 
+        ggml_metal_moe_cache_bindings moe_cache = {};
+        if (ne21 == 1) {
+            moe_cache = ggml_metal_moe_cache_get_bindings(ctx->moe_cache, op->src[0]);
+        }
+
         const int nr0 = pipeline.nr0;
         const int nr1 = pipeline.nr1;
         const int nsg = pipeline.nsg;
@@ -2709,6 +2719,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             /*.ne1  =*/ ne1,
             /*.nb1  =*/ nb1,
             /*.nr0  =*/ nr0,
+            /*.moe_cache =*/ moe_cache.enabled,
         };
 
         if (ggml_is_quantized(op->src[0]->type)) {
@@ -2721,6 +2732,9 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer(enc, bid_src1, 2);
         ggml_metal_encoder_set_buffer(enc, bid_dst,  3);
         ggml_metal_encoder_set_buffer(enc, bid_src2, 4);
+        ggml_metal_encoder_set_buffer(enc, moe_cache.enabled ? moe_cache.weights    : bid_src0, 5);
+        ggml_metal_encoder_set_buffer(enc, moe_cache.enabled ? moe_cache.page_table : bid_src0, 6);
+        ggml_metal_encoder_set_buffer(enc, moe_cache.enabled ? moe_cache.access     : bid_src0, 7);
 
         const int64_t _ne1 = 1;
         const int64_t ne123 = ne20*ne21;
