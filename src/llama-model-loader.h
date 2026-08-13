@@ -27,6 +27,7 @@ enum llama_fver {
 };
 
 const char * llama_file_version_name(llama_fver version);
+bool llama_model_loader_is_moe_expert(const std::string & name);
 
 struct llama_model_loader {
     // Holds information on a model weight
@@ -203,7 +204,8 @@ struct llama_model_loader {
             llama_buf_map & bufs,
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
-            void * progress_callback_user_data);
+            void * progress_callback_user_data,
+            bool skip_moe_experts = false);
 
     std::string ftype_name() const;
 

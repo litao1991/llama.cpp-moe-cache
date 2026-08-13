@@ -204,6 +204,16 @@ static void test_layer_budget_waterfill() {
     assert(budgets[1] == 2);
 }
 
+static void test_mobile_capacity_budget() {
+    const size_t mib = 1024 * 1024;
+    assert(ggml_moe_cache_capacity_budget(
+            1024 * mib, 900 * mib, 700 * mib, 512 * mib, 128 * mib, 32 * mib, 256 * mib) == 256 * mib);
+    assert(ggml_moe_cache_capacity_budget(
+            1024 * mib, 900 * mib, 300 * mib, 512 * mib, 128 * mib, 32 * mib, 256 * mib) == 160 * mib);
+    assert(ggml_moe_cache_capacity_budget(
+            1024 * mib, 120 * mib, 700 * mib, 512 * mib, 128 * mib, 32 * mib, 256 * mib) == 0);
+}
+
 static void test_cost_aware_admission() {
     ggml_moe_cache_policy cache(8, 80, 2, 0, 0);
 
@@ -295,6 +305,21 @@ static void test_markov_prefill_seed() {
     assert(predictions[0].state == 2);
 }
 
+static void test_markov_sparse_prefill_seed() {
+    ggml_moe_markov markov(4, 2);
+    std::vector<uint32_t> transitions(4 * 2, 0);
+    transitions[1 * 2 + 0] = (6u << 16) | (2u + 1);
+    transitions[1 * 2 + 1] = (2u << 16) | (3u + 1);
+    markov.seed_sparse(transitions.data(), 2, 16);
+
+    const auto predictions = markov.predict({ 1 });
+    assert(predictions.size() == 2);
+    assert(predictions[0].state == 2);
+    assert(predictions[0].count == 12);
+    assert(predictions[0].total == 16);
+    assert(predictions[1].state == 3);
+}
+
 static void test_prefetch_does_not_count_as_access() {
     ggml_moe_cache_slots cache(4, 1, 80, 2);
 
@@ -314,6 +339,25 @@ static void test_prefetch_does_not_count_as_access() {
     assert(result.hit);
     assert(cache.stats().accesses == 1);
     assert(cache.stats().hits == 1);
+}
+
+static void test_required_set_is_not_evicted() {
+    ggml_moe_cache_slots cache(12, 1, 80, 1, 0, 0);
+    assert(cache.prefetch(1, 4).admitted);
+    assert(cache.prefetch(2, 4).admitted);
+    assert(cache.prefetch(3, 4).admitted);
+
+    const std::vector<uint64_t> required = { 1, 4, 5 };
+    auto result = cache.require(1, 4, 0, required);
+    assert(result.hit);
+    result = cache.require(4, 4, 0, required);
+    assert(result.admitted);
+    assert(cache.contains(1));
+    result = cache.require(5, 4, 0, required);
+    assert(result.admitted);
+    assert(cache.contains(1));
+    assert(cache.contains(4));
+    assert(cache.contains(5));
 }
 
 static void test_adaptive_prefetch_control() {
@@ -351,12 +395,15 @@ int main() {
     test_group_soft_budget();
     test_dynamic_group_budget();
     test_layer_budget_waterfill();
+    test_mobile_capacity_budget();
     test_cost_aware_admission();
     test_full_eviction_set_cost();
     test_frequency_windows();
     test_markov_prediction();
     test_markov_prefill_seed();
+    test_markov_sparse_prefill_seed();
     test_prefetch_does_not_count_as_access();
+    test_required_set_is_not_evicted();
     test_adaptive_prefetch_control();
     return 0;
 }

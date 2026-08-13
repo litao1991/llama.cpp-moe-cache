@@ -10382,6 +10382,49 @@ kernel void kernel_mul_mm(
 
 #endif // GGML_METAL_HAS_TENSOR
 
+static inline void moe_sparse_transition_add(
+        device atomic_uint * row,
+        uint transition_slots,
+        uint destination) {
+    const uint destination_bits = destination + 1;
+    uint minimum_count = 0xffffu;
+    uint minimum_slot = 0;
+
+    for (uint slot = 0; slot < transition_slots; ++slot) {
+        uint packed = atomic_load_explicit(row + slot, memory_order_relaxed);
+        const uint stored_destination = packed & 0xffffu;
+        if (stored_destination == destination_bits) {
+            while ((packed & 0xffffu) == destination_bits) {
+                const uint count = min(packed >> 16, 0xfffeu) + 1;
+                const uint desired = (count << 16) | destination_bits;
+                if (atomic_compare_exchange_weak_explicit(
+                        row + slot, &packed, desired, memory_order_relaxed, memory_order_relaxed)) {
+                    return;
+                }
+            }
+        }
+        if (stored_destination == 0) {
+            uint expected = 0;
+            if (atomic_compare_exchange_weak_explicit(
+                    row + slot, &expected, 0x10000u | destination_bits, memory_order_relaxed, memory_order_relaxed)) {
+                return;
+            }
+            packed = expected;
+        }
+        const uint count = packed >> 16;
+        if (count < minimum_count) {
+            minimum_count = count;
+            minimum_slot = slot;
+        }
+    }
+
+    uint expected = atomic_load_explicit(row + minimum_slot, memory_order_relaxed);
+    const uint replacement_count = min(expected >> 16, 0xfffeu) + 1;
+    const uint desired = (replacement_count << 16) | destination_bits;
+    atomic_compare_exchange_weak_explicit(
+            row + minimum_slot, &expected, desired, memory_order_relaxed, memory_order_relaxed);
+}
+
 template<short ne20> // n_expert_used
 kernel void kernel_mul_mm_id_map0(
         constant ggml_metal_kargs_mul_mm_id_map0 & args,
@@ -10446,7 +10489,10 @@ kernel void kernel_mul_mm_id_map0(
                 for (short destination_index = 0; destination_index < ne20; ++destination_index) {
                     const int32_t destination = current[destination_index];
                     if (destination >= 0 && destination < args.ne02) {
-                        atomic_fetch_add_explicit(moe_transitions + (ulong) source*args.ne02 + destination, 1u, memory_order_relaxed);
+                        moe_sparse_transition_add(
+                                moe_transitions + (ulong) source*args.moe_transition_slots,
+                                args.moe_transition_slots,
+                                destination);
                     }
                 }
             }
@@ -10991,6 +11037,8 @@ kernel void kernel_mul_mv_id(
         const uint64_t offset = moe_page_table[i02];
         if (offset != ~uint64_t(0)) {
             src0_cur = moe_weights + offset;
+        } else if (args.moe_strict) {
+            return;
         }
         if (tiitg == 0) {
             atomic_store_explicit(moe_access + i02, 1, memory_order_relaxed);

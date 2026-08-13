@@ -12,12 +12,54 @@
 #include "llama-ext.h"
 #include "llama.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#include <os/proc.h>
+#endif
+
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
+
+size_t ggml_moe_cache_capacity_budget(
+        size_t requested,
+        size_t metal_headroom,
+        size_t process_headroom,
+        size_t device_cap,
+        size_t reserve,
+        size_t alignment,
+        size_t initial_cap);
+
+#if defined(__APPLE__) && defined(TARGET_OS_IOS) && TARGET_OS_IOS
+static constexpr size_t LLAMA_MOE_CACHE_ALIGNMENT     = 32ull * 1024 * 1024;
+static constexpr size_t LLAMA_MOE_CACHE_RESERVE_FLOOR = 512ull * 1024 * 1024;
+static constexpr size_t LLAMA_MOE_CACHE_INITIAL_CAP   = 256ull * 1024 * 1024;
+static constexpr size_t LLAMA_MOE_CACHE_DEVICE_CAP    = 1024ull * 1024 * 1024;
+#else
+static constexpr size_t LLAMA_MOE_CACHE_ALIGNMENT     = 256ull * 1024 * 1024;
+static constexpr size_t LLAMA_MOE_CACHE_RESERVE_FLOOR = 1024ull * 1024 * 1024;
+static constexpr size_t LLAMA_MOE_CACHE_INITIAL_CAP   = SIZE_MAX;
+static constexpr size_t LLAMA_MOE_CACHE_DEVICE_CAP    = SIZE_MAX;
+#endif
+
+static size_t llama_moe_cache_safe_capacity(ggml_backend_dev_t dev, size_t requested) {
+    size_t free  = 0;
+    size_t total = 0;
+    ggml_backend_dev_memory(dev, &free, &total);
+
+    const size_t reserve = std::max(LLAMA_MOE_CACHE_RESERVE_FLOOR, total / 16);
+#if defined(__APPLE__) && defined(TARGET_OS_IOS) && TARGET_OS_IOS
+    const size_t process_headroom = os_proc_available_memory();
+#else
+    const size_t process_headroom = SIZE_MAX;
+#endif
+    return ggml_moe_cache_capacity_budget(
+            requested, free, process_headroom, LLAMA_MOE_CACHE_DEVICE_CAP,
+            reserve, LLAMA_MOE_CACHE_ALIGNMENT, LLAMA_MOE_CACHE_INITIAL_CAP);
+}
 
 //
 // llama_context
@@ -78,6 +120,20 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.name             =*/ "fused DeepSeek V4 HC post",
     /*.n_tokens_per_seq =*/ 1,
 };
+
+static size_t llama_moe_cache_max_bundle_bytes(const llama_model & model) {
+    size_t max_bytes = 0;
+    for (const auto & layer : model.layers) {
+        size_t bytes = 0;
+        for (const ggml_tensor * tensor : { layer.ffn_gate_exps, layer.ffn_up_exps, layer.ffn_down_exps }) {
+            if (tensor) {
+                bytes += GGML_PAD(tensor->nb[2], 4096);
+            }
+        }
+        max_bytes = std::max(max_bytes, bytes);
+    }
+    return max_bytes;
+}
 
 llama_context::llama_context(
         const llama_model & model,
@@ -264,6 +320,22 @@ llama_context::llama_context(
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
+    if (model.moe_cache_bytes() > 0 && hparams.n_expert_used > 0) {
+        const size_t bundle_bytes = llama_moe_cache_max_bundle_bytes(model);
+        if (bundle_bytes > 0) {
+            const size_t ubatch_capacity = std::min(model.moe_cache_bytes(), LLAMA_MOE_CACHE_INITIAL_CAP);
+            const size_t max_ubatch = ubatch_capacity / bundle_bytes / hparams.n_expert_used;
+            if (max_ubatch == 0) {
+                throw std::runtime_error("MoE expert cache is too small for one token");
+            }
+            if (cparams.n_ubatch > max_ubatch) {
+                LLAMA_LOG_WARN("%s: reducing n_ubatch from %u to %zu for the MoE expert cache capacity\n",
+                        __func__, cparams.n_ubatch, max_ubatch);
+                cparams.n_ubatch = (uint32_t) max_ubatch;
+            }
+        }
+    }
+
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
 
     cparams.op_offload = params.op_offload;
@@ -361,6 +433,13 @@ llama_context::llama_context(
                     if (fn) {
                         moe_cache_backends.emplace_back(backend.get(), fn);
 
+                        auto prepare = (moe_cache_prepare_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_prepare_moe_cache");
+                        auto finalize = (moe_cache_finalize_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_finalize_moe_cache");
+                        if (prepare && finalize) {
+                            moe_cache_prepare_backends.emplace_back(backend.get(), prepare);
+                            moe_cache_finalize_backends.emplace_back(backend.get(), finalize);
+                        }
+
                         auto profile_set = (moe_profile_set_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_moe_profile");
                         auto profile_reset = (moe_profile_reset_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_reset_moe_profile");
                         if (profile_set && profile_reset && profile_set(backend.get(), true)) {
@@ -376,7 +455,19 @@ llama_context::llama_context(
                 LLAMA_LOG_WARN("%s: MoE expert cache requested but no Metal backend is active\n", __func__);
             } else {
                 moe_cache_pending = true;
-                LLAMA_LOG_INFO("%s: deferring %.2f MiB MoE expert cache allocation until decode\n",
+                if (moe_cache_prepare_backends.size() == moe_cache_backends.size()) {
+                    for (const auto & item : moe_cache_prepare_backends) {
+                        const size_t requested = model.moe_cache_bytes() / moe_cache_prepare_backends.size();
+                        const size_t capacity = llama_moe_cache_safe_capacity(ggml_backend_get_device(item.first), requested);
+                        if (capacity < LLAMA_MOE_CACHE_ALIGNMENT) {
+                            throw std::runtime_error("no safe capacity is available for the Metal MoE expert cache");
+                        }
+                        if (!item.second(item.first, capacity) || !model.register_moe_sources(item.first)) {
+                            throw std::runtime_error("failed to prepare Metal MoE expert cache");
+                        }
+                    }
+                }
+                LLAMA_LOG_INFO("%s: prepared %.2f MiB MoE expert cache for out-of-core execution\n",
                         __func__, model.moe_cache_bytes() / 1024.0 / 1024.0);
             }
         }
@@ -504,9 +595,15 @@ llama_context::llama_context(
 }
 
 void llama_context::moe_cache_init() {
-    static constexpr size_t alignment     = 256ull * 1024 * 1024;
-    static constexpr size_t reserve_floor = 1024ull * 1024 * 1024;
-
+    if (moe_cache_finalize_backends.size() == moe_cache_backends.size()) {
+        for (const auto & item : moe_cache_finalize_backends) {
+            if (!item.second(item.first)) {
+                throw std::runtime_error("failed to finalize Metal MoE expert cache");
+            }
+        }
+        moe_cache_pending = false;
+        return;
+    }
     moe_cache_pending = false;
 
     const size_t requested = model.moe_cache_bytes() / moe_cache_backends.size();
@@ -518,28 +615,44 @@ void llama_context::moe_cache_init() {
         size_t free  = 0;
         size_t total = 0;
         ggml_backend_dev_memory(dev, &free, &total);
-
-        const size_t reserve = std::max(reserve_floor, total / 16);
-        const size_t safe    = free > reserve ? (free - reserve) / alignment * alignment : 0;
-        size_t capacity      = std::min(requested, safe);
+        const size_t reserve = std::max(LLAMA_MOE_CACHE_RESERVE_FLOOR, total / 16);
+        size_t capacity = llama_moe_cache_safe_capacity(dev, requested);
 
         LLAMA_LOG_INFO("%s: requested = %.2f MiB, available = %.2f MiB, reserve = %.2f MiB, initial = %.2f MiB\n",
                 __func__, requested / 1024.0 / 1024.0, free / 1024.0 / 1024.0,
                 reserve / 1024.0 / 1024.0, capacity / 1024.0 / 1024.0);
 
-        while (capacity >= alignment && !item.second(item.first, capacity)) {
-            capacity = (capacity / 2) / alignment * alignment;
+        while (capacity >= LLAMA_MOE_CACHE_ALIGNMENT && !item.second(item.first, capacity)) {
+            capacity = (capacity / 2) / LLAMA_MOE_CACHE_ALIGNMENT * LLAMA_MOE_CACHE_ALIGNMENT;
             LLAMA_LOG_WARN("%s: retrying MoE expert cache allocation with %.2f MiB\n",
                     __func__, capacity / 1024.0 / 1024.0);
         }
 
-        if (capacity < alignment) {
+        if (capacity < LLAMA_MOE_CACHE_ALIGNMENT) {
             LLAMA_LOG_WARN("%s: MoE expert cache disabled because no safe capacity is available\n", __func__);
         } else {
+            if (!model.register_moe_sources(item.first)) {
+                LLAMA_LOG_WARN("%s: failed to register GGUF expert file sources\n", __func__);
+            }
             LLAMA_LOG_INFO("%s: MoE expert cache active capacity = %.2f MiB\n",
                     __func__, capacity / 1024.0 / 1024.0);
         }
     }
+}
+
+bool llama_context::set_moe_cache(size_t capacity_bytes) {
+    if (moe_cache_backends.empty()) {
+        return capacity_bytes == 0;
+    }
+    synchronize();
+    const size_t per_backend = capacity_bytes / moe_cache_backends.size();
+    for (const auto & item : moe_cache_backends) {
+        if (!item.second(item.first, per_backend)) {
+            return false;
+        }
+    }
+    moe_cache_pending = false;
+    return true;
 }
 
 llama_context::~llama_context() {
@@ -3784,6 +3897,10 @@ void llama_set_warmup(llama_context * ctx, bool warmup) {
 
 void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
+}
+
+bool llama_set_moe_cache(llama_context * ctx, size_t capacity_bytes) {
+    return ctx && ctx->set_moe_cache(capacity_bytes);
 }
 
 float * llama_get_logits(llama_context * ctx) {

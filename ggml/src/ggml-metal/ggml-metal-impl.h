@@ -514,6 +514,7 @@ typedef struct {
     uint64_t nb21;
     uint32_t moe_profile;
     uint32_t moe_transitions;
+    uint32_t moe_transition_slots;
 } ggml_metal_kargs_mul_mm_id_map0;
 
 typedef struct {
@@ -557,6 +558,7 @@ typedef struct {
     uint64_t nb1;
     int32_t  nr0;
     uint32_t moe_cache;
+    uint32_t moe_strict;
     uint32_t moe_profile;
 } ggml_metal_kargs_mul_mv_id;
 

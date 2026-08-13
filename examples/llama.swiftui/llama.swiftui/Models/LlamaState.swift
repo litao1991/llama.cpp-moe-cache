@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 struct Model: Identifiable {
     var id = UUID()
@@ -25,6 +26,16 @@ class LlamaState: ObservableObject {
     init() {
         loadModelsFromDisk()
         loadDefaultModels()
+        NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                await self?.handleMemoryWarning()
+            }
+        }
+        NotificationCenter.default.addObserver(forName: .llamaEnteredBackground, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                await self?.handleBackground()
+            }
+        }
     }
 
     private func loadModelsFromDisk() {
@@ -192,5 +203,13 @@ class LlamaState: ObservableObject {
 
         await llamaContext.clear()
         messageLog = ""
+    }
+
+    private func handleMemoryWarning() async {
+        await llamaContext?.handleMemoryWarning()
+    }
+
+    private func handleBackground() async {
+        await llamaContext?.handleBackground()
     }
 }

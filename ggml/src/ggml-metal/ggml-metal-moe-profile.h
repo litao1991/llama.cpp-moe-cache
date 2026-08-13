@@ -17,6 +17,7 @@ struct ggml_metal_moe_profile_bindings {
     uint32_t * host_counts;
     uint32_t * host_transitions;
     uint32_t * host_previous;
+    uint32_t transition_slots;
 };
 
 struct ggml_metal_moe_profile_stats {
@@ -29,6 +30,7 @@ struct ggml_metal_moe_tensor_profile_stats {
     const uint32_t * counts;
     const uint32_t * transitions;
     uint32_t n_experts;
+    uint32_t transition_slots;
 };
 
 ggml_metal_moe_profile_t ggml_metal_moe_profile_init(ggml_metal_device_t dev);
@@ -45,7 +47,6 @@ bool ggml_metal_moe_profile_get_tensor_stats(
 struct ggml_metal_moe_profile_bindings ggml_metal_moe_profile_get_bindings(
         ggml_metal_moe_profile_t profile,
         const struct ggml_tensor * tensor);
-
 #ifdef __cplusplus
 }
 #endif

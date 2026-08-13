@@ -2588,7 +2588,12 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     GGML_ASSERT(ne03 == 1);
     GGML_ASSERT(ne13 == 1);
 
-    ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
+    ggml_metal_moe_cache_bindings moe_cache = {};
+    if (ne21 == 1 || ggml_metal_moe_cache_needs_residency(ctx->moe_cache, op->src[0])) {
+        moe_cache = ggml_metal_moe_cache_get_bindings(ctx->moe_cache, op->src[0]);
+    }
+
+    ggml_metal_buffer_id bid_src0 = moe_cache.strict ? moe_cache.weights : ggml_metal_get_buffer_id(op->src[0]);
     ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
     ggml_metal_buffer_id bid_src2 = ggml_metal_get_buffer_id(op->src[2]);
     ggml_metal_buffer_id bid_dst  = ggml_metal_get_buffer_id(op);
@@ -2605,7 +2610,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     // ne21 = n_rows (batch size)
     const int ne21_mm_id_min = 32;
 
-    if (props_dev->has_simdgroup_mm && ne00 >= 64 && (ne21 >= ne21_mm_id_min)) {
+    if (!moe_cache.strict && props_dev->has_simdgroup_mm && ne00 >= 64 && (ne21 >= ne21_mm_id_min)) {
         // some Metal matrix data types require aligned pointers
         // ref: https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf (Table 2.5)
         //switch (op->src[0]->type) {
@@ -2634,6 +2639,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
                 nb21,
                 moe_profile.enabled,
                 moe_profile.transitions_enabled,
+                moe_profile.transition_slots,
             };
 
             auto pipeline = ggml_metal_library_get_pipeline_mul_mm_id_map0(lib, ne02, ne20);
@@ -2700,11 +2706,6 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     } else {
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_id(lib, op);
 
-        ggml_metal_moe_cache_bindings moe_cache = {};
-        if (ne21 == 1) {
-            moe_cache = ggml_metal_moe_cache_get_bindings(ctx->moe_cache, op->src[0]);
-        }
-
         const int nr0 = pipeline.nr0;
         const int nr1 = pipeline.nr1;
         const int nsg = pipeline.nsg;
@@ -2733,6 +2734,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             /*.nb1  =*/ nb1,
             /*.nr0  =*/ nr0,
             /*.moe_cache =*/ moe_cache.enabled,
+            /*.moe_strict =*/ moe_cache.strict,
             /*.moe_profile =*/ moe_profile.enabled,
         };
 

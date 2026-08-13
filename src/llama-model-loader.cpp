@@ -1337,15 +1337,11 @@ void llama_model_loader::done_getting_tensors(bool partial) const {
     }
 }
 
-static bool llama_model_loader_is_moe_expert(const std::string & name) {
+bool llama_model_loader_is_moe_expert(const std::string & name) {
     static const char * const patterns[] = {
-        ".ffn_gate_exps",
-        ".ffn_gate_up_exps",
-        ".ffn_down_exps",
-        ".ffn_up_exps",
-        ".ffn_gate_chexps",
-        ".ffn_down_chexps",
-        ".ffn_up_chexps",
+        ".ffn_gate_exps.weight",
+        ".ffn_down_exps.weight",
+        ".ffn_up_exps.weight",
     };
 
     for (const char * pattern : patterns) {
@@ -1470,7 +1466,8 @@ bool llama_model_loader::load_all_data(
         llama_buf_map & bufs,
         llama_mlocks * lmlocks,
         llama_progress_callback progress_callback,
-        void * progress_callback_user_data) {
+        void * progress_callback_user_data,
+        bool skip_moe_experts) {
     if (files.empty()) {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
             set_tensor_data(t, set_tensor_data_ud);
@@ -1595,6 +1592,11 @@ bool llama_model_loader::load_all_data(
 
         size_t n_size = ggml_nbytes(cur);
 
+        if (skip_moe_experts && llama_model_loader_is_moe_expert(cur->name)) {
+            size_done += n_size;
+            continue;
+        }
+
         if (use_mmap) {
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
@@ -1620,7 +1622,7 @@ bool llama_model_loader::load_all_data(
                 auto & mmap_used = mmaps_used[weight->idx];
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
-            } else {
+            } else if (cur->data != data) {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
         } else {

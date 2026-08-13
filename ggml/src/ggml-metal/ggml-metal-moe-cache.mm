@@ -15,6 +15,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include <unistd.h>
+
 #import <Metal/Metal.h>
 
 static constexpr size_t GGML_METAL_MOE_STAGING_SIZE = 32 * 1024 * 1024;
@@ -52,6 +54,7 @@ struct ggml_metal_moe_tensor_cache {
     size_t expert_size = 0;
     size_t bundle_offset = 0;
     ggml_metal_buffer_id source = { nullptr, 0 };
+    ggml_metal_moe_expert_source file_source = { -1, 0, 0, 0 };
     ggml_metal_buffer_t page_table_buffer = nullptr;
     uint64_t * page_table = nullptr;
 };
@@ -101,8 +104,8 @@ struct ggml_metal_moe_cache {
             prefetch_control.record_outcome(false);
         }
         prefetched.clear();
-        const auto & stats = slots.stats();
-        GGML_LOG_INFO("%s: accesses = %llu, hits = %llu, admission attempts = %llu, admissions = %llu, cost rejections = %llu, allocation failures = %llu, evictions = %llu, resident entries = %zu, resident bytes = %zu, staging batches = %llu, async copies = %llu, predictions = %llu, prefetch attempts = %llu, prefetch admissions = %llu, useful prefetches = %llu, wasted prefetches = %llu, adaptive skips = %llu, copy pressure updates = %llu, remaining stops = %llu, controller outcomes = %u/%u, controller updates = %u, prefill Markov bundles = %zu, tensors = %zu, bundles = %zu, direct bytes = %llu, staged bytes = %llu\n",
+        const auto stats = slots.stats();
+        GGML_LOG_INFO("%s: accesses = %llu, hits = %llu, admission attempts = %llu, admissions = %llu, cost rejections = %llu, allocation failures = %llu, evictions = %llu, resident entries = %zu, resident bytes = %zu, staging batches = %llu, async copies = %llu, synchronous loads = %llu, synchronous hits = %llu, predictions = %llu, prefetch attempts = %llu, prefetch admissions = %llu, useful prefetches = %llu, wasted prefetches = %llu, adaptive skips = %llu, copy pressure updates = %llu, remaining stops = %llu, controller outcomes = %u/%u, controller updates = %u, prefill Markov bundles = %zu, tensors = %zu, bundles = %zu, direct bytes = %llu, staged bytes = %llu\n",
                 __func__,
                 (unsigned long long) stats.accesses,
                 (unsigned long long) stats.hits,
@@ -115,6 +118,8 @@ struct ggml_metal_moe_cache {
                 slots.resident_bytes(),
                 (unsigned long long) staging_batches,
                 (unsigned long long) async_copies,
+                (unsigned long long) synchronous_loads,
+                (unsigned long long) synchronous_hits,
                 (unsigned long long) predictions,
                 (unsigned long long) prefetch_attempts,
                 (unsigned long long) prefetch_admissions,
@@ -149,6 +154,7 @@ struct ggml_metal_moe_cache {
     ggml_moe_cache_slots slots;
     std::mutex mutex;
     std::unordered_map<const ggml_tensor *, ggml_metal_moe_tensor_cache *> tensor_map;
+    std::unordered_map<const ggml_tensor *, ggml_metal_moe_expert_source> file_sources;
     std::vector<std::unique_ptr<ggml_metal_moe_tensor_cache>> tensors;
     std::unordered_map<uint64_t, ggml_metal_moe_bundle_cache *> bundle_map;
     std::vector<std::unique_ptr<ggml_metal_moe_bundle_cache>> bundles;
@@ -165,6 +171,8 @@ struct ggml_metal_moe_cache {
     uint64_t async_copies = 0;
     uint64_t direct_copy_bytes = 0;
     uint64_t staged_copy_bytes = 0;
+    uint64_t synchronous_loads = 0;
+    uint64_t synchronous_hits = 0;
     uint64_t predictions = 0;
     uint64_t prefetch_attempts = 0;
     uint64_t prefetch_admissions = 0;
@@ -239,7 +247,7 @@ struct ggml_metal_moe_cache {
     }
 
     void copy_part(const ggml_metal_moe_tensor_cache & entry, uint32_t expert, size_t offset) {
-        if (direct_blit) {
+        if (direct_blit && entry.file_source.fd < 0) {
             begin_copy();
             const auto dst = ggml_metal_buffer_get_base_id(buffer);
             [copy_encoder copyFromBuffer:(id<MTLBuffer>) entry.source.metal
@@ -259,8 +267,14 @@ struct ggml_metal_moe_cache {
             }
             begin_copy();
             const size_t chunk = std::min(entry.expert_size - copied, GGML_METAL_MOE_STAGING_SIZE - staged_bytes);
-            memcpy((char *) ggml_metal_buffer_get_base(staging[staging_index]) + staged_bytes,
-                    (const char *) entry.tensor->data + expert * entry.expert_size + copied, chunk);
+            void * destination = (char *) ggml_metal_buffer_get_base(staging[staging_index]) + staged_bytes;
+            if (entry.file_source.fd >= 0) {
+                const uint64_t file_offset = entry.file_source.file_offset + (uint64_t) expert * entry.expert_size + copied;
+                const ssize_t read_bytes = pread(entry.file_source.fd, destination, chunk, (off_t) file_offset);
+                GGML_ASSERT(read_bytes == (ssize_t) chunk);
+            } else {
+                memcpy(destination, (const char *) entry.tensor->data + expert * entry.expert_size + copied, chunk);
+            }
             const auto src = ggml_metal_buffer_get_base_id(staging[staging_index]);
             const auto dst = ggml_metal_buffer_get_base_id(buffer);
             [copy_encoder copyFromBuffer:(id<MTLBuffer>) src.metal
@@ -299,6 +313,85 @@ struct ggml_metal_moe_cache {
                 member->page_table[expert_id] = UINT64_MAX;
             }
         }
+    }
+
+    bool resize(size_t capacity_bytes) {
+        std::lock_guard<std::mutex> lock(mutex);
+        wait_for_copy();
+        struct resident {
+            uint64_t key;
+            uint64_t score;
+        };
+        std::vector<resident> residents;
+        residents.reserve(slots.resident_entries());
+        for (const auto & bundle : bundles) {
+            for (uint32_t expert = 0; expert < bundle->n_experts; ++expert) {
+                const uint64_t key = ((uint64_t) bundle->id << 32) | expert;
+                if (slots.contains(key)) {
+                    residents.push_back({
+                        key,
+                        (uint64_t) slots.short_frequency(key) * 4 + slots.frequency(key),
+                    });
+                }
+                for (const auto * member : bundle->members) {
+                    member->page_table[expert] = UINT64_MAX;
+                }
+            }
+        }
+        std::sort(residents.begin(), residents.end(), [](const resident & a, const resident & b) {
+            return a.score != b.score ? a.score > b.score : a.key < b.key;
+        });
+
+        if (buffer) {
+            ggml_metal_buffer_free(buffer);
+            buffer = nullptr;
+        }
+        capacity = capacity_bytes;
+        slots.reset(capacity_bytes, 4096);
+        if (n_layers > 0) {
+            slots.set_group_count(n_layers);
+        }
+        prefetched.clear();
+        if (capacity_bytes == 0) {
+            for (auto & item : staging) {
+                if (item) {
+                    ggml_metal_buffer_free(item);
+                    item = nullptr;
+                }
+            }
+            return true;
+        }
+
+        buffer = ggml_metal_buffer_init(dev, capacity_bytes, false);
+        if (!buffer) {
+            capacity = 0;
+            slots.reset(0, 4096);
+            return false;
+        }
+        if (!direct_blit) {
+            for (auto & item : staging) {
+                if (!item) {
+                    item = ggml_metal_buffer_init(dev, GGML_METAL_MOE_STAGING_SIZE, true);
+                }
+                if (!item || !ggml_metal_buffer_is_shared(item)) {
+                    return false;
+                }
+            }
+        }
+        for (const auto & resident : residents) {
+            const uint32_t bundle_id = (uint32_t) (resident.key >> 32);
+            const uint32_t expert = (uint32_t) resident.key;
+            auto & bundle = *bundles[bundle_id];
+            const auto result = slots.prefetch(resident.key, bundle.expert_size, bundle.layer, resident.score * 1024);
+            if (!result.admitted) {
+                continue;
+            }
+            copy_expert(bundle, expert, result.offset);
+            set_page_tables(bundle, expert, result.offset);
+        }
+        commit_copy();
+        wait_for_copy();
+        return true;
     }
 };
 
@@ -347,10 +440,17 @@ static uint64_t ggml_metal_moe_cache_bundle_key(uint32_t layer, uint32_t n_exper
 static struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_disabled(void) {
     return {
         false,
+        false,
         { nullptr, 0 },
         { nullptr, 0 },
         { nullptr, 0 },
     };
+}
+
+static bool ggml_metal_moe_bundle_has_file_sources(const ggml_metal_moe_bundle_cache & bundle) {
+    return !bundle.members.empty() && std::all_of(bundle.members.begin(), bundle.members.end(), [](const auto * member) {
+        return member->file_source.fd >= 0;
+    });
 }
 
 ggml_metal_moe_cache_t ggml_metal_moe_cache_init(ggml_metal_device_t dev, size_t capacity_bytes) {
@@ -367,6 +467,107 @@ void ggml_metal_moe_cache_free(ggml_metal_moe_cache_t cache) {
     delete cache;
 }
 
+bool ggml_metal_moe_cache_resize(ggml_metal_moe_cache_t cache, size_t capacity_bytes) {
+    return cache && cache->resize(capacity_bytes);
+}
+
+bool ggml_metal_moe_cache_set_source(
+        ggml_metal_moe_cache_t cache,
+        const struct ggml_tensor * tensor,
+        struct ggml_metal_moe_expert_source source) {
+    if (!cache || !tensor || source.fd < 0 || source.byte_size < ggml_nbytes(tensor)) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(cache->mutex);
+        cache->file_sources[tensor] = source;
+        const auto entry = cache->tensor_map.find(tensor);
+        if (entry != cache->tensor_map.end()) {
+            entry->second->file_source = source;
+        }
+        cache->direct_blit = false;
+        for (auto & staging : cache->staging) {
+            if (!staging) {
+                staging = ggml_metal_buffer_init(cache->dev, GGML_METAL_MOE_STAGING_SIZE, true);
+            }
+            if (!staging || !ggml_metal_buffer_is_shared(staging)) {
+                return false;
+            }
+        }
+    }
+    return ggml_metal_moe_cache_get_bindings(cache, tensor).enabled;
+}
+
+bool ggml_metal_moe_cache_needs_residency(
+        ggml_metal_moe_cache_t cache,
+        const struct ggml_tensor * tensor) {
+    if (!cache || !tensor || !cache->buffer) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(cache->mutex);
+    const auto entry = cache->tensor_map.find(tensor);
+    return entry != cache->tensor_map.end() && ggml_metal_moe_bundle_has_file_sources(*entry->second->bundle);
+}
+
+bool ggml_metal_moe_cache_require(
+        ggml_metal_moe_cache_t cache,
+        const struct ggml_tensor * tensor,
+        const int32_t * ids,
+        uint32_t n_tokens,
+        uint32_t n_expert_used,
+        size_t token_stride) {
+    if (!cache || !tensor || !ids || n_tokens == 0 || n_expert_used == 0) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(cache->mutex);
+    const auto entry_it = cache->tensor_map.find(tensor);
+    if (entry_it == cache->tensor_map.end()) {
+        return false;
+    }
+    auto & bundle = *entry_it->second->bundle;
+    if (!ggml_metal_moe_bundle_has_file_sources(bundle)) {
+        return false;
+    }
+
+    std::vector<uint64_t> required;
+    for (uint32_t token = 0; token < n_tokens; ++token) {
+        const auto * token_ids = (const int32_t *) ((const char *) ids + token * token_stride);
+        for (uint32_t index = 0; index < n_expert_used; ++index) {
+            const int32_t expert = token_ids[index];
+            if (expert < 0 || expert >= (int32_t) bundle.n_experts) {
+                return false;
+            }
+            required.push_back(ggml_metal_moe_cache_key(bundle.id, (uint32_t) expert));
+        }
+    }
+    std::sort(required.begin(), required.end());
+    required.erase(std::unique(required.begin(), required.end()), required.end());
+    if (required.size() * ggml_metal_moe_align(bundle.expert_size) > cache->capacity) {
+        return false;
+    }
+
+    for (uint64_t key : required) {
+        const uint32_t expert = (uint32_t) key;
+        const auto result = cache->slots.require(key, bundle.expert_size, bundle.layer, required);
+        for (uint64_t evicted : result.evicted) {
+            cache->invalidate(evicted);
+        }
+        if (result.hit) {
+            ++cache->synchronous_hits;
+            continue;
+        }
+        if (!result.admitted) {
+            return false;
+        }
+        cache->copy_expert(bundle, expert, result.offset);
+        cache->set_page_tables(bundle, expert, result.offset);
+        ++cache->synchronous_loads;
+    }
+    cache->commit_copy();
+    cache->wait_for_copy();
+    return true;
+}
+
 struct ggml_metal_moe_cache_result ggml_metal_moe_cache_access(ggml_metal_moe_cache_t cache, uint64_t key, size_t size_bytes) {
     const auto result = cache->slots.access(key, size_bytes);
     return {
@@ -379,17 +580,7 @@ struct ggml_metal_moe_cache_result ggml_metal_moe_cache_access(ggml_metal_moe_ca
 struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
         ggml_metal_moe_cache_t cache,
         const struct ggml_tensor * tensor) {
-    if (!cache || !tensor || tensor->ne[2] <= 1 || tensor->ne[2] > std::numeric_limits<uint32_t>::max() || tensor->nb[2] > cache->capacity) {
-        return ggml_metal_moe_cache_disabled();
-    }
-
-    ggml_backend_buffer_t backend_buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
-    if (!backend_buffer) {
-        return ggml_metal_moe_cache_disabled();
-    }
-
-    ggml_metal_buffer_t source_buffer = (ggml_metal_buffer_t) backend_buffer->context;
-    if (!ggml_metal_buffer_is_shared(source_buffer)) {
+    if (!cache || !cache->buffer || !tensor || tensor->ne[2] <= 1 || tensor->ne[2] > std::numeric_limits<uint32_t>::max() || tensor->nb[2] > cache->capacity) {
         return ggml_metal_moe_cache_disabled();
     }
 
@@ -399,6 +590,7 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
         const auto * entry = existing->second;
         return {
             true,
+            ggml_metal_moe_bundle_has_file_sources(*entry->bundle),
             ggml_metal_buffer_get_base_id(cache->buffer),
             ggml_metal_buffer_get_base_id(entry->page_table_buffer),
             ggml_metal_buffer_get_base_id(entry->bundle->access_buffer),
@@ -412,8 +604,21 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
     const uint32_t n_experts = (uint32_t) tensor->ne[2];
     const uint32_t layer = ggml_metal_moe_cache_layer(tensor->name);
     const int part = ggml_metal_moe_cache_part(tensor->name);
-    const ggml_metal_buffer_id source = cache->direct_blit ? ggml_metal_buffer_get_id(source_buffer, tensor) : ggml_metal_buffer_id { nullptr, 0 };
-    if (cache->direct_blit && !source.metal) {
+    const auto file_source_it = cache->file_sources.find(tensor);
+    const bool has_file_source = file_source_it != cache->file_sources.end();
+    ggml_metal_buffer_id source = { nullptr, 0 };
+    if (!has_file_source) {
+        ggml_backend_buffer_t backend_buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+        if (!backend_buffer || ggml_backend_buffer_get_size(backend_buffer) == 0) {
+            return ggml_metal_moe_cache_disabled();
+        }
+        ggml_metal_buffer_t source_buffer = (ggml_metal_buffer_t) backend_buffer->context;
+        if (!ggml_metal_buffer_is_shared(source_buffer)) {
+            return ggml_metal_moe_cache_disabled();
+        }
+        source = ggml_metal_buffer_get_id(source_buffer, tensor);
+    }
+    if (!has_file_source && !source.metal) {
         return ggml_metal_moe_cache_disabled();
     }
 
@@ -454,6 +659,9 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
     entry->expert_size = tensor->nb[2];
     entry->bundle_offset = ggml_metal_moe_align(bundle->expert_size);
     entry->source = source;
+    if (has_file_source) {
+        entry->file_source = file_source_it->second;
+    }
     entry->page_table_buffer = ggml_metal_buffer_init(cache->dev, n_experts * sizeof(uint64_t), true);
     if (!entry->page_table_buffer || !ggml_metal_buffer_is_shared(entry->page_table_buffer)) {
         return ggml_metal_moe_cache_disabled();
@@ -484,6 +692,7 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
 
     return {
         true,
+        ggml_metal_moe_bundle_has_file_sources(*raw->bundle),
         ggml_metal_buffer_get_base_id(cache->buffer),
         ggml_metal_buffer_get_base_id(raw->page_table_buffer),
         ggml_metal_buffer_get_base_id(raw->bundle->access_buffer),
@@ -600,6 +809,21 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
     cache->commit_copy();
 }
 
+void ggml_metal_moe_cache_attach_profile(
+        ggml_metal_moe_cache_t cache,
+        ggml_metal_moe_profile_t profile) {
+    if (!cache || !profile) {
+        return;
+    }
+    for (size_t index = 0;; ++index) {
+        ggml_metal_moe_tensor_profile_stats stats = {};
+        if (!ggml_metal_moe_profile_get_tensor_stats(profile, index, &stats)) {
+            break;
+        }
+        ggml_metal_moe_cache_get_bindings(cache, stats.tensor);
+    }
+}
+
 void ggml_metal_moe_cache_preload(ggml_metal_moe_cache_t cache, ggml_metal_moe_profile_t profile) {
     if (!cache || !profile) {
         return;
@@ -628,7 +852,7 @@ void ggml_metal_moe_cache_preload(ggml_metal_moe_cache_t cache, ggml_metal_moe_p
         }
         auto * bundle = tensor_it->second->bundle;
         if (cache->prefill_markov && stats.transitions && seeded_bundles.insert(bundle->id).second) {
-            bundle->markov->seed(stats.transitions);
+            bundle->markov->seed_sparse(stats.transitions, stats.transition_slots);
             ++cache->prefill_markov_tensors;
         }
         if (!seen_bundles.insert(bundle->id).second) {

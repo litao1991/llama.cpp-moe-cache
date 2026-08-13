@@ -43,6 +43,15 @@ std::vector<size_t> ggml_moe_layer_budgets(
         uint32_t layer_count,
         const std::vector<ggml_moe_layer_candidate> & candidates);
 
+size_t ggml_moe_cache_capacity_budget(
+        size_t requested,
+        size_t metal_headroom,
+        size_t process_headroom,
+        size_t device_cap,
+        size_t reserve,
+        size_t alignment,
+        size_t initial_cap);
+
 class ggml_moe_cache_policy {
 public:
     ggml_moe_cache_policy(
@@ -58,8 +67,10 @@ public:
 
     ggml_moe_cache_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX);
     ggml_moe_cache_result prefetch(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, uint64_t predicted_benefit = UINT64_MAX);
+    ggml_moe_cache_result require(uint64_t key, size_t size_bytes, uint32_t group, const std::vector<uint64_t> & protected_keys);
     bool erase(uint64_t key);
     bool evict(uint64_t & key);
+    bool evict(uint64_t & key, const std::vector<uint64_t> & protected_keys);
     void set_group_count(uint32_t group_count);
     void set_group_budgets(const std::vector<size_t> & budgets);
 
@@ -95,10 +106,12 @@ public:
 
     ggml_moe_cache_slot_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX);
     ggml_moe_cache_slot_result prefetch(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, uint64_t predicted_benefit = UINT64_MAX);
+    ggml_moe_cache_slot_result require(uint64_t key, size_t size_bytes, uint32_t group, const std::vector<uint64_t> & protected_keys);
     bool erase(uint64_t key);
     void set_group_count(uint32_t group_count);
     void set_group_budgets(const std::vector<size_t> & budgets);
     void reset_stats();
+    void reset(size_t capacity_bytes, size_t alignment);
 
     bool contains(uint64_t key) const;
     size_t offset(uint64_t key) const;
@@ -106,6 +119,8 @@ public:
     size_t resident_entries() const;
     size_t largest_free_range() const;
     size_t group_resident_bytes(uint32_t group) const;
+    uint32_t frequency(uint64_t key) const;
+    uint32_t short_frequency(uint64_t key) const;
     const ggml_moe_cache_stats & stats() const;
 
 private:
@@ -152,6 +167,7 @@ public:
     ggml_moe_markov & operator=(const ggml_moe_markov &) = delete;
 
     void seed(const uint32_t * transitions, uint32_t prior_strength = 32);
+    void seed_sparse(const uint32_t * transitions, uint32_t transition_slots, uint32_t prior_strength = 32);
     std::vector<ggml_moe_markov_prediction> predict(const std::vector<uint32_t> & states) const;
     std::vector<ggml_moe_markov_prediction> observe(const std::vector<uint32_t> & states);
 

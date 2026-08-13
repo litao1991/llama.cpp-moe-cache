@@ -633,6 +633,25 @@ bool ggml_backend_metal_set_moe_cache(ggml_backend_t backend, size_t capacity_by
     return ggml_metal_set_moe_cache(ctx, capacity_bytes);
 }
 
+static bool ggml_backend_metal_prepare_moe_cache(ggml_backend_t backend, size_t capacity_bytes) {
+    return ggml_metal_prepare_moe_cache((ggml_metal_t) backend->context, capacity_bytes);
+}
+
+static bool ggml_backend_metal_finalize_moe_cache(ggml_backend_t backend) {
+    return ggml_metal_finalize_moe_cache((ggml_metal_t) backend->context);
+}
+
+static bool ggml_backend_metal_set_moe_source(
+        ggml_backend_t backend,
+        const struct ggml_tensor * tensor,
+        int fd,
+        uint64_t file_offset,
+        uint64_t byte_size,
+        int32_t type) {
+    GGML_ASSERT(ggml_backend_is_metal(backend));
+    return ggml_metal_set_moe_source((ggml_metal_t) backend->context, tensor, fd, file_offset, byte_size, type);
+}
+
 bool ggml_backend_metal_set_moe_profile(ggml_backend_t backend, bool enabled) {
     GGML_ASSERT(ggml_backend_is_metal(backend));
 
@@ -898,6 +917,15 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const 
     }
     if (strcmp(name, "ggml_backend_metal_set_moe_cache") == 0) {
         return (void *)ggml_backend_metal_set_moe_cache;
+    }
+    if (strcmp(name, "ggml_backend_metal_prepare_moe_cache") == 0) {
+        return (void *)ggml_backend_metal_prepare_moe_cache;
+    }
+    if (strcmp(name, "ggml_backend_metal_finalize_moe_cache") == 0) {
+        return (void *)ggml_backend_metal_finalize_moe_cache;
+    }
+    if (strcmp(name, "ggml_backend_metal_set_moe_source") == 0) {
+        return (void *)ggml_backend_metal_set_moe_source;
     }
     if (strcmp(name, "ggml_backend_metal_set_moe_profile") == 0) {
         return (void *)ggml_backend_metal_set_moe_profile;

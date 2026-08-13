@@ -10,6 +10,8 @@
 #include "ggml-metal-moe-profile.h"
 
 #include <cassert>
+#include <cstdio>
+#include <unistd.h>
 
 int main() {
     ggml_init_params params = {
@@ -42,7 +44,8 @@ int main() {
     assert(bindings.host_previous != nullptr);
     bindings.host_counts[1] = 3;
     bindings.host_counts[3] = 5;
-    bindings.host_transitions[1 * 4 + 3] = 7;
+    assert(bindings.transition_slots > 0);
+    bindings.host_transitions[1 * bindings.transition_slots] = (7u << 16) | (3u + 1);
     bindings.host_previous[0] = 2;
 
     auto bindings2 = ggml_metal_moe_profile_get_bindings(profile, tensor2);
@@ -70,7 +73,8 @@ int main() {
     assert(tensor_stats.n_experts == 4);
     assert(tensor_stats.counts[1] == 3);
     assert(tensor_stats.counts[3] == 5);
-    assert(tensor_stats.transitions[1 * 4 + 3] == 7);
+    assert(tensor_stats.transition_slots == bindings.transition_slots);
+    assert(tensor_stats.transitions[1 * tensor_stats.transition_slots] == ((7u << 16) | (3u + 1)));
     assert(ggml_metal_moe_profile_get_tensor_stats(profile, 3, &tensor_stats));
     assert(tensor_stats.tensor == up);
     assert(tensor_stats.counts[2] == 11);
@@ -80,7 +84,7 @@ int main() {
     stats = ggml_metal_moe_profile_get_stats(profile);
     assert(stats.tensors == 5);
     assert(stats.selections == 0);
-    assert(bindings.host_transitions[1 * 4 + 3] == 0);
+    assert(bindings.host_transitions[1 * bindings.transition_slots] == 0);
     assert(bindings.host_previous[0] == UINT32_MAX);
 
     bindings.host_counts[2] = 7;
@@ -113,6 +117,28 @@ int main() {
     assert(gate_cache.access.offs == down_cache.access.offs);
     assert(gate_cache.page_table.metal != up_cache.page_table.metal);
     assert(gate_cache.page_table.metal != down_cache.page_table.metal);
+    assert(ggml_metal_moe_cache_resize(cache, 512 * 1024));
+    assert(ggml_metal_moe_cache_get_capacity(cache) == 512 * 1024);
+    assert(ggml_metal_moe_cache_get_bindings(cache, gate).enabled);
+    assert(ggml_metal_moe_cache_resize(cache, 0));
+    assert(ggml_metal_moe_cache_get_capacity(cache) == 0);
+    assert(!ggml_metal_moe_cache_get_bindings(cache, gate).enabled);
+    assert(ggml_metal_moe_cache_resize(cache, 256 * 1024));
+    assert(ggml_metal_moe_cache_get_bindings(cache, gate).enabled);
+
+    char path[] = "/tmp/llama-moe-source-XXXXXX";
+    const int fd = mkstemp(path);
+    assert(fd >= 0);
+    assert(ftruncate(fd, (off_t) ggml_nbytes(gate)) == 0);
+    ggml_metal_moe_expert_source source = {
+        fd,
+        0,
+        ggml_nbytes(gate),
+        (int32_t) gate->type,
+    };
+    assert(ggml_metal_moe_cache_set_source(cache, gate, source));
+    close(fd);
+    std::remove(path);
 
     ggml_metal_moe_cache_free(cache);
     ggml_backend_buffer_free(buffer);

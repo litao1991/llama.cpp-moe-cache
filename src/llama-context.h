@@ -56,6 +56,7 @@ struct llama_context {
     void sched_reserve();
 
     void synchronize();
+    bool set_moe_cache(size_t capacity_bytes);
 
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
@@ -351,9 +352,13 @@ private:
     std::vector<ggml_backend_ptr> backends;
 
     using moe_cache_set_fn = bool (*)(ggml_backend_t backend, size_t capacity_bytes);
+    using moe_cache_prepare_fn = bool (*)(ggml_backend_t backend, size_t capacity_bytes);
+    using moe_cache_finalize_fn = bool (*)(ggml_backend_t backend);
     using moe_profile_set_fn = bool (*)(ggml_backend_t backend, bool enabled);
     using moe_profile_reset_fn = void (*)(ggml_backend_t backend);
     std::vector<std::pair<ggml_backend_t, moe_cache_set_fn>> moe_cache_backends;
+    std::vector<std::pair<ggml_backend_t, moe_cache_prepare_fn>> moe_cache_prepare_backends;
+    std::vector<std::pair<ggml_backend_t, moe_cache_finalize_fn>> moe_cache_finalize_backends;
     std::vector<std::pair<ggml_backend_t, moe_profile_reset_fn>> moe_profile_backends;
     bool moe_cache_pending = false;
 

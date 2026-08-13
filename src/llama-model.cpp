@@ -38,6 +38,12 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
     switch (arch) {
         case LLM_ARCH_LLAMA:
@@ -1005,7 +1011,15 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
 
 struct llama_model::impl {
     impl() = default;
-    ~impl() = default;
+    ~impl() {
+        for (int fd : moe_source_fds) {
+#if defined(_WIN32)
+            _close(fd);
+#else
+            close(fd);
+#endif
+        }
+    }
 
     uint64_t n_elements = 0;
 
@@ -1040,6 +1054,16 @@ struct llama_model::impl {
     bool has_tensor_overrides;
 
     std::vector<float> tensor_split_owned;
+
+    struct moe_source {
+        const ggml_tensor * tensor;
+        int fd;
+        uint64_t offset;
+        uint64_t size;
+        int32_t type;
+    };
+    std::vector<moe_source> moe_sources;
+    std::vector<int> moe_source_fds;
 };
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
@@ -1534,6 +1558,36 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr, params.moe_cache_bytes == 0);
+    if (params.moe_cache_bytes > 0) {
+        std::vector<int> source_fds(ml.files.size(), -1);
+        for (const auto & item : ml.weights_map) {
+            const auto & weight = item.second;
+            if (llama_model_loader_is_moe_expert(item.first)) {
+                int & fd = source_fds[weight.idx];
+                if (fd < 0) {
+#if defined(_WIN32)
+                    fd = _dup(ml.files[weight.idx]->file_id());
+#else
+                    fd = dup(ml.files[weight.idx]->file_id());
+#endif
+                    if (fd >= 0) {
+                        pimpl->moe_source_fds.push_back(fd);
+                    }
+                }
+                const ggml_tensor * tensor = get_tensor(item.first.c_str());
+                if (!tensor || fd < 0) {
+                    throw std::runtime_error(format("failed to retain MoE expert source for %s", item.first.c_str()));
+                }
+                pimpl->moe_sources.push_back({
+                    tensor,
+                    fd,
+                    weight.offs,
+                    ggml_nbytes(weight.tensor),
+                    (int32_t) weight.tensor->type,
+                });
+            }
+        }
+    }
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -1570,7 +1624,75 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         bool is_default_buft = buft == ggml_backend_dev_buffer_type(dev);
 
         std::vector<ggml_backend_buffer_ptr> bufs;
-        if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+        ggml_backend_reg_t backend_reg = ggml_backend_dev_backend_reg(dev);
+        const bool is_metal = backend_reg && ggml_backend_reg_get_proc_address(backend_reg, "ggml_backend_metal_set_moe_source");
+        const bool out_of_core_moe = params.moe_cache_bytes > 0 &&
+                ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft &&
+                ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU &&
+                is_metal;
+        if (out_of_core_moe) {
+            const char * buft_name = ggml_backend_buft_name(buft);
+            GGML_ASSERT(!ml.no_alloc);
+            ggml_backend_buffer_t expert_placeholder = ggml_backend_buft_alloc_buffer(buft, 0);
+            if (!expert_placeholder) {
+                throw std::runtime_error(format("unable to allocate expert placeholder for %s", ggml_backend_buft_name(buft)));
+            }
+            bufs.emplace_back(expert_placeholder);
+
+            for (uint32_t idx = 0; idx < ml.files.size(); ++idx) {
+                void * addr = ml.mappings.at(idx)->addr();
+                std::vector<ggml_tensor *> tensors;
+                for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
+                    const auto * weight = ml.get_weight(tensor->name);
+                    if (weight && weight->idx == idx) {
+                        tensors.push_back(tensor);
+                    }
+                }
+                std::sort(tensors.begin(), tensors.end(), [&](const auto * a, const auto * b) {
+                    return ml.require_weight(a->name).offs < ml.require_weight(b->name).offs;
+                });
+
+                size_t range_begin = 0;
+                size_t range_end = 0;
+                std::vector<ggml_tensor *> range_tensors;
+                auto flush_range = [&] {
+                    if (range_tensors.empty()) {
+                        return;
+                    }
+                    size_t max_tensor_size = 0;
+                    for (const auto * tensor : range_tensors) {
+                        max_tensor_size = std::max(max_tensor_size, ggml_nbytes(tensor));
+                    }
+                    ggml_backend_buffer_t mapped = ggml_backend_dev_buffer_from_host_ptr(
+                            dev, (char *) addr + range_begin, range_end - range_begin, max_tensor_size);
+                    if (!mapped) {
+                        throw std::runtime_error(format("unable to allocate %s buffer", buft_name));
+                    }
+                    bufs.emplace_back(mapped);
+                    for (auto * tensor : range_tensors) {
+                        ggml_backend_tensor_alloc(mapped, tensor, (char *) addr + ml.require_weight(tensor->name).offs);
+                    }
+                    range_tensors.clear();
+                };
+
+                for (auto * tensor : tensors) {
+                    const auto & weight = ml.require_weight(tensor->name);
+                    if (llama_model_loader_is_moe_expert(tensor->name)) {
+                        flush_range();
+                        tensor->buffer = expert_placeholder;
+                        tensor->data = (char *) addr + weight.offs;
+                        continue;
+                    }
+                    if (range_tensors.empty()) {
+                        range_begin = weight.offs;
+                    }
+                    range_end = weight.offs + ggml_nbytes(tensor);
+                    range_tensors.push_back(tensor);
+                }
+                flush_range();
+                ml.mmaps_used[idx] = { 0, ml.mappings.at(idx)->size() };
+            }
+        } else if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
             GGML_ASSERT(!ml.no_alloc);
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 // only the mmap region containing the tensors in the model is mapped to the backend buffer
@@ -1657,7 +1779,14 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     // load tensor data
     for (auto & [ctx, buf_map] : ctx_buf_maps) {
-        if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+        bool skip_moe_experts = false;
+        for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
+            if (llama_model_loader_is_moe_expert(tensor->name) && tensor->buffer && ggml_backend_buffer_get_size(tensor->buffer) == 0) {
+                skip_moe_experts = true;
+                break;
+            }
+        }
+        if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data, skip_moe_experts)) {
             return false;
         }
     }
@@ -1721,6 +1850,25 @@ llama_split_mode llama_model::split_mode() const {
 
 size_t llama_model::moe_cache_bytes() const {
     return params.moe_cache_bytes;
+}
+
+bool llama_model::register_moe_sources(ggml_backend_t backend) const {
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    if (!reg) {
+        return false;
+    }
+    using set_source_fn = bool (*)(ggml_backend_t, const ggml_tensor *, int, uint64_t, uint64_t, int32_t);
+    auto set_source = (set_source_fn) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_moe_source");
+    if (!set_source) {
+        return false;
+    }
+    for (const auto & source : pimpl->moe_sources) {
+        if (!set_source(backend, source.tensor, source.fd, source.offset, source.size, source.type)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
