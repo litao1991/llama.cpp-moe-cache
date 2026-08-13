@@ -31,6 +31,18 @@ struct ggml_moe_cache_slot_result {
     std::vector<uint64_t> evicted;
 };
 
+struct ggml_moe_layer_candidate {
+    uint32_t layer;
+    size_t size_bytes;
+    uint64_t expected_hits;
+    size_t read_bytes;
+};
+
+std::vector<size_t> ggml_moe_layer_budgets(
+        size_t capacity_bytes,
+        uint32_t layer_count,
+        const std::vector<ggml_moe_layer_candidate> & candidates);
+
 class ggml_moe_cache_policy {
 public:
     ggml_moe_cache_policy(
@@ -49,6 +61,7 @@ public:
     bool erase(uint64_t key);
     bool evict(uint64_t & key);
     void set_group_count(uint32_t group_count);
+    void set_group_budgets(const std::vector<size_t> & budgets);
 
     bool contains(uint64_t key) const;
     size_t capacity_bytes() const;
@@ -84,6 +97,7 @@ public:
     ggml_moe_cache_slot_result prefetch(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, uint64_t predicted_benefit = UINT64_MAX);
     bool erase(uint64_t key);
     void set_group_count(uint32_t group_count);
+    void set_group_budgets(const std::vector<size_t> & budgets);
     void reset_stats();
 
     bool contains(uint64_t key) const;

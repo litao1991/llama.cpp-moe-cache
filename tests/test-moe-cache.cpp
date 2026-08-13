@@ -171,6 +171,39 @@ static void test_group_soft_budget() {
     assert(cache.group_resident_bytes(2) == 4);
 }
 
+static void test_dynamic_group_budget() {
+    ggml_moe_cache_slots cache(12, 1, 80, 1, 4096, 1);
+    cache.set_group_budgets({ 2, 6, 4 });
+
+    cache.prefetch(1, 2, 0);
+    cache.prefetch(2, 2, 0);
+    cache.prefetch(3, 6, 1);
+    cache.prefetch(4, 2, 2);
+    const auto result = cache.prefetch(5, 2, 2);
+
+    assert(result.admitted);
+    assert(result.evicted.size() == 1);
+    assert(result.evicted[0] == 1);
+    assert(cache.group_resident_bytes(0) == 2);
+    assert(cache.group_resident_bytes(1) == 6);
+    assert(cache.group_resident_bytes(2) == 4);
+}
+
+static void test_layer_budget_waterfill() {
+    const std::vector<ggml_moe_layer_candidate> candidates = {
+        { 0, 2, 100, 2 },
+        { 0, 2, 90, 2 },
+        { 0, 2, 80, 2 },
+        { 1, 2, 60, 2 },
+        { 1, 2, 10, 2 },
+        { 1, 2, 5, 2 },
+    };
+    const auto budgets = ggml_moe_layer_budgets(8, 2, candidates);
+    assert(budgets.size() == 2);
+    assert(budgets[0] == 6);
+    assert(budgets[1] == 2);
+}
+
 static void test_cost_aware_admission() {
     ggml_moe_cache_policy cache(8, 80, 2, 0, 0);
 
@@ -316,6 +349,8 @@ int main() {
     test_slot_alignment_and_coalescing();
     test_slot_fragmentation_recovery();
     test_group_soft_budget();
+    test_dynamic_group_budget();
+    test_layer_budget_waterfill();
     test_cost_aware_admission();
     test_full_eviction_set_cost();
     test_frequency_windows();

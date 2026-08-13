@@ -3,7 +3,10 @@
 #endif
 
 #include "ggml.h"
+#include "ggml-backend.h"
+#include "ggml-metal.h"
 #include "ggml-metal-device.h"
+#include "ggml-metal-moe-cache.h"
 #include "ggml-metal-moe-profile.h"
 
 #include <cassert>
@@ -21,6 +24,12 @@ int main() {
     ggml_set_name(tensor, "test.experts");
     ggml_tensor * tensor2 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 4, 4, 3);
     ggml_set_name(tensor2, "test.experts.2");
+    ggml_tensor * gate = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 4, 4, 4);
+    ggml_set_name(gate, "blk.0.ffn_gate_exps.weight");
+    ggml_tensor * up = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 4, 4, 4);
+    ggml_set_name(up, "blk.0.ffn_up_exps.weight");
+    ggml_tensor * down = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 4, 4, 4);
+    ggml_set_name(down, "blk.0.ffn_down_exps.weight");
 
     ggml_metal_moe_profile_t profile = ggml_metal_moe_profile_init(ggml_metal_device_get(0));
     assert(profile != nullptr);
@@ -42,9 +51,19 @@ int main() {
     assert(bindings2.counts.offs == bindings.counts.offs + 4 * sizeof(uint32_t));
     bindings2.host_counts[0] = 2;
 
+    auto gate_bindings = ggml_metal_moe_profile_get_bindings(profile, gate);
+    auto up_bindings = ggml_metal_moe_profile_get_bindings(profile, up);
+    auto down_bindings = ggml_metal_moe_profile_get_bindings(profile, down);
+    assert(gate_bindings.enabled);
+    assert(!up_bindings.enabled);
+    assert(!down_bindings.enabled);
+    assert(gate_bindings.host_counts == up_bindings.host_counts);
+    assert(gate_bindings.host_counts == down_bindings.host_counts);
+    gate_bindings.host_counts[2] = 11;
+
     auto stats = ggml_metal_moe_profile_get_stats(profile);
-    assert(stats.tensors == 2);
-    assert(stats.selections == 10);
+    assert(stats.tensors == 5);
+    assert(stats.selections == 21);
     ggml_metal_moe_tensor_profile_stats tensor_stats;
     assert(ggml_metal_moe_profile_get_tensor_stats(profile, 0, &tensor_stats));
     assert(tensor_stats.tensor == tensor);
@@ -52,11 +71,14 @@ int main() {
     assert(tensor_stats.counts[1] == 3);
     assert(tensor_stats.counts[3] == 5);
     assert(tensor_stats.transitions[1 * 4 + 3] == 7);
-    assert(!ggml_metal_moe_profile_get_tensor_stats(profile, 2, &tensor_stats));
+    assert(ggml_metal_moe_profile_get_tensor_stats(profile, 3, &tensor_stats));
+    assert(tensor_stats.tensor == up);
+    assert(tensor_stats.counts[2] == 11);
+    assert(!ggml_metal_moe_profile_get_tensor_stats(profile, 5, &tensor_stats));
 
     ggml_metal_moe_profile_reset(profile);
     stats = ggml_metal_moe_profile_get_stats(profile);
-    assert(stats.tensors == 2);
+    assert(stats.tensors == 5);
     assert(stats.selections == 0);
     assert(bindings.host_transitions[1 * 4 + 3] == 0);
     assert(bindings.host_previous[0] == UINT32_MAX);
@@ -72,6 +94,29 @@ int main() {
     assert(tensor_stats.transitions == nullptr);
 
     ggml_metal_moe_profile_free(profile);
+
+    ggml_backend_t backend = ggml_backend_metal_init();
+    assert(backend != nullptr);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    assert(buffer != nullptr);
+    ggml_metal_moe_cache_t cache = ggml_metal_moe_cache_init(ggml_metal_device_get(0), 1024 * 1024);
+    assert(cache != nullptr);
+    const auto gate_cache = ggml_metal_moe_cache_get_bindings(cache, gate);
+    const auto up_cache = ggml_metal_moe_cache_get_bindings(cache, up);
+    const auto down_cache = ggml_metal_moe_cache_get_bindings(cache, down);
+    assert(gate_cache.enabled);
+    assert(up_cache.enabled);
+    assert(down_cache.enabled);
+    assert(gate_cache.access.metal == up_cache.access.metal);
+    assert(gate_cache.access.offs == up_cache.access.offs);
+    assert(gate_cache.access.metal == down_cache.access.metal);
+    assert(gate_cache.access.offs == down_cache.access.offs);
+    assert(gate_cache.page_table.metal != up_cache.page_table.metal);
+    assert(gate_cache.page_table.metal != down_cache.page_table.metal);
+
+    ggml_metal_moe_cache_free(cache);
+    ggml_backend_buffer_free(buffer);
+    ggml_backend_free(backend);
     ggml_free(ctx);
     return 0;
 }

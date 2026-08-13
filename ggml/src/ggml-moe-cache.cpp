@@ -26,6 +26,77 @@ struct ggml_moe_cache_history {
     uint32_t long_frequency = 0;
 };
 
+std::vector<size_t> ggml_moe_layer_budgets(
+        size_t capacity_bytes,
+        uint32_t layer_count,
+        const std::vector<ggml_moe_layer_candidate> & candidates) {
+    std::vector<size_t> budgets(layer_count, 0);
+    if (capacity_bytes == 0 || layer_count == 0) {
+        return budgets;
+    }
+
+    std::vector<std::vector<const ggml_moe_layer_candidate *>> by_layer(layer_count);
+    for (const auto & candidate : candidates) {
+        if (candidate.layer < layer_count && candidate.size_bytes > 0 && candidate.size_bytes <= capacity_bytes) {
+            by_layer[candidate.layer].push_back(&candidate);
+        }
+    }
+    auto score_greater = [](const auto * a, const auto * b) {
+        const long double a_score = (long double) a->expected_hits * a->read_bytes / a->size_bytes;
+        const long double b_score = (long double) b->expected_hits * b->read_bytes / b->size_bytes;
+        return a_score != b_score ? a_score > b_score : a->size_bytes < b->size_bytes;
+    };
+    for (auto & layer : by_layer) {
+        std::sort(layer.begin(), layer.end(), score_greater);
+    }
+
+    size_t used = 0;
+    std::vector<size_t> next(layer_count, 0);
+    for (uint32_t layer = 0; layer < layer_count; ++layer) {
+        if (by_layer[layer].empty()) {
+            continue;
+        }
+        const size_t size_bytes = by_layer[layer][0]->size_bytes;
+        if (size_bytes <= capacity_bytes - used) {
+            budgets[layer] += size_bytes;
+            used += size_bytes;
+            next[layer] = 1;
+        }
+    }
+
+    while (used < capacity_bytes) {
+        uint32_t selected_layer = UINT32_MAX;
+        for (uint32_t layer = 0; layer < layer_count; ++layer) {
+            if (next[layer] >= by_layer[layer].size()) {
+                continue;
+            }
+            const auto * candidate = by_layer[layer][next[layer]];
+            if (candidate->size_bytes > capacity_bytes - used) {
+                continue;
+            }
+            if (selected_layer == UINT32_MAX || score_greater(candidate, by_layer[selected_layer][next[selected_layer]])) {
+                selected_layer = layer;
+            }
+        }
+        if (selected_layer == UINT32_MAX) {
+            break;
+        }
+        const size_t size_bytes = by_layer[selected_layer][next[selected_layer]]->size_bytes;
+        budgets[selected_layer] += size_bytes;
+        used += size_bytes;
+        ++next[selected_layer];
+    }
+
+    uint32_t residual_layer = 0;
+    for (uint32_t layer = 1; layer < layer_count; ++layer) {
+        if (budgets[layer] > budgets[residual_layer]) {
+            residual_layer = layer;
+        }
+    }
+    budgets[residual_layer] += capacity_bytes - used;
+    return budgets;
+}
+
 struct ggml_moe_cache_policy::impl {
     impl(
             size_t capacity_bytes,
@@ -52,6 +123,8 @@ struct ggml_moe_cache_policy::impl {
     size_t probation_size = 0;
     uint32_t group_count = 0;
     std::vector<size_t> group_resident;
+    std::vector<size_t> group_budgets;
+    bool custom_group_budgets = false;
     ggml_moe_cache_stats stats;
     std::list<uint64_t> probation;
     std::list<uint64_t> protected_lru;
@@ -143,10 +216,10 @@ struct ggml_moe_cache_policy::impl {
             return UINT32_MAX;
         }
 
-        const size_t target = capacity / group_count;
         uint32_t selected = UINT32_MAX;
         size_t selected_excess = 0;
         for (uint32_t group = 0; group < group_count; ++group) {
+            const size_t target = group < group_budgets.size() ? group_budgets[group] : capacity / group_count;
             const size_t bytes = resident_by_group[group];
             if (bytes > target && bytes - target > selected_excess) {
                 selected = group;
@@ -439,6 +512,12 @@ void ggml_moe_cache_policy::set_group_count(uint32_t group_count) {
     }
     pimpl->group_count = group_count;
     pimpl->group_resident.resize(group_count, 0);
+    if (!pimpl->custom_group_budgets) {
+        pimpl->group_budgets.resize(group_count);
+        for (uint32_t group = 0; group < group_count; ++group) {
+            pimpl->group_budgets[group] = pimpl->capacity / group_count + (group < pimpl->capacity % group_count);
+        }
+    }
     std::fill(pimpl->group_resident.begin(), pimpl->group_resident.end(), 0);
     for (const auto & item : pimpl->entries) {
         const auto & entry = item.second;
@@ -446,6 +525,15 @@ void ggml_moe_cache_policy::set_group_count(uint32_t group_count) {
             pimpl->group_resident[entry.group] += entry.size_bytes;
         }
     }
+}
+
+void ggml_moe_cache_policy::set_group_budgets(const std::vector<size_t> & budgets) {
+    if (budgets.empty()) {
+        return;
+    }
+    set_group_count((uint32_t) budgets.size());
+    pimpl->group_budgets = budgets;
+    pimpl->custom_group_budgets = true;
 }
 
 bool ggml_moe_cache_policy::contains(uint64_t key) const {
@@ -658,6 +746,10 @@ ggml_moe_cache_slot_result ggml_moe_cache_slots::prefetch(uint64_t key, size_t s
 
 void ggml_moe_cache_slots::set_group_count(uint32_t group_count) {
     pimpl->policy.set_group_count(group_count);
+}
+
+void ggml_moe_cache_slots::set_group_budgets(const std::vector<size_t> & budgets) {
+    pimpl->policy.set_group_budgets(budgets);
 }
 
 void ggml_moe_cache_slots::reset_stats() {
