@@ -573,11 +573,14 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
         if (strict_moe) {
             id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
             int start = 0;
+            const struct ggml_tensor * resident_tensor = NULL;
             while (start < gf->n_nodes) {
                 int end = start;
                 while (end < gf->n_nodes) {
                     const struct ggml_tensor * node = gf->nodes[end];
-                    if (node->op == GGML_OP_MUL_MAT_ID && ggml_metal_moe_cache_needs_residency(ctx->moe_cache, node->src[0])) {
+                    if (node->op == GGML_OP_MUL_MAT_ID &&
+                            ggml_metal_moe_cache_needs_residency(ctx->moe_cache, node->src[0]) &&
+                            (!resident_tensor || !ggml_metal_moe_cache_same_bundle(ctx->moe_cache, resident_tensor, node->src[0]))) {
                         break;
                     }
                     ++end;
@@ -608,6 +611,7 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                     break;
                 }
                 struct ggml_tensor * node = gf->nodes[end];
+                resident_tensor = NULL;
                 ggml_backend_buffer_t ids_backend_buffer = node->src[2]->view_src ? node->src[2]->view_src->buffer : node->src[2]->buffer;
                 ggml_metal_buffer_t ids_buffer = ids_backend_buffer ? ids_backend_buffer->context : NULL;
                 if (!ids_buffer || !ggml_metal_buffer_is_shared(ids_buffer) ||
@@ -621,22 +625,8 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                     GGML_LOG_ERROR("%s: failed to make experts resident for tensor '%s'\n", __func__, node->src[0]->name);
                     return GGML_STATUS_FAILED;
                 }
-
-                id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
-                ggml_metal_op_t op_ctx = ggml_metal_op_init(
-                        ctx->dev, cmd_buf, ctx->moe_cache, ctx->moe_profile, gf,
-                        end, end + 1, ctx->use_fusion, false, ctx->capture_compute,
-                        ctx->debug_graph, ctx->debug_fusion);
-                if (ggml_metal_op_n_nodes(op_ctx) > 0) {
-                    ggml_metal_op_encode(op_ctx, 0);
-                }
-                ggml_metal_op_free(op_ctx);
-                [cmd_buf commit];
-                [cmd_buf waitUntilCompleted];
-                if ([cmd_buf status] != MTLCommandBufferStatusCompleted) {
-                    return GGML_STATUS_FAILED;
-                }
-                start = end + 1;
+                resident_tensor = node->src[0];
+                start = end;
             }
             ggml_metal_moe_cache_update(ctx->moe_cache);
             return GGML_STATUS_SUCCESS;

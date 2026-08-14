@@ -2610,7 +2610,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     // ne21 = n_rows (batch size)
     const int ne21_mm_id_min = 32;
 
-    if (!moe_cache.strict && props_dev->has_simdgroup_mm && ne00 >= 64 && (ne21 >= ne21_mm_id_min)) {
+    if ((!moe_cache.strict || moe_cache.strict_mm) && props_dev->has_simdgroup_mm && ne00 >= 64 && (ne21 >= ne21_mm_id_min)) {
         // some Metal matrix data types require aligned pointers
         // ref: https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf (Table 2.5)
         //switch (op->src[0]->type) {
@@ -2687,6 +2687,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
                 /*.ne1   =*/ ne1,
                 /*.r2    =*/ r2,
                 /*.r3    =*/ r3,
+                /*.moe_strict =*/ moe_cache.strict,
             };
 
             ggml_metal_encoder_set_pipeline(enc, pipeline);
@@ -2696,6 +2697,8 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer  (enc, bid_tpe,  3);
             ggml_metal_encoder_set_buffer  (enc, bid_ids,  4);
             ggml_metal_encoder_set_buffer  (enc, bid_dst,  5);
+            ggml_metal_encoder_set_buffer  (enc, moe_cache.strict ? moe_cache.page_table : bid_src0, 6);
+            ggml_metal_encoder_set_buffer  (enc, moe_cache.strict ? moe_cache.access     : bid_src0, 7);
 
             const size_t smem = pipeline.smem;
 

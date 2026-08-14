@@ -74,6 +74,7 @@ struct ggml_metal_moe_bundle_cache {
     ggml_metal_buffer_t access_buffer = nullptr;
     uint32_t * access = nullptr;
     std::unique_ptr<ggml_moe_markov> markov;
+    std::unique_ptr<ggml_moe_markov> next_layer_markov;
     std::vector<ggml_metal_moe_tensor_cache *> members;
 };
 
@@ -88,7 +89,12 @@ struct ggml_metal_moe_cache {
         bundle_enabled = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_BUNDLE", true);
         dynamic_layer_budget = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_DYNAMIC_LAYER_BUDGET", true);
         direct_blit = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_DIRECT_BLIT", true);
+        strict_mm = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_MM_ID", true);
+        next_layer_prefetch = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_NEXT_LAYER_PREFETCH", false);
+        next_layer_min_percent = ggml_metal_moe_env_u32("GGML_METAL_MOE_CACHE_NEXT_LAYER_MIN_PERCENT", 4);
+        next_layer_max_mib = ggml_metal_moe_env_u32("GGML_METAL_MOE_CACHE_NEXT_LAYER_MIB", 4);
         remaining_tokens_hint = ggml_metal_moe_env_u32("GGML_METAL_MOE_CACHE_REMAINING_TOKENS", UINT32_MAX);
+        copy_queue = [(id<MTLDevice>) ggml_metal_device_get_obj(dev) newCommandQueue];
         buffer = ggml_metal_buffer_init(dev, capacity_bytes, false);
         if (!direct_blit) {
             for (size_t i = 0; i < 2; ++i) {
@@ -105,7 +111,7 @@ struct ggml_metal_moe_cache {
         }
         prefetched.clear();
         const auto stats = slots.stats();
-        GGML_LOG_INFO("%s: accesses = %llu, hits = %llu, admission attempts = %llu, admissions = %llu, cost rejections = %llu, allocation failures = %llu, evictions = %llu, resident entries = %zu, resident bytes = %zu, staging batches = %llu, async copies = %llu, synchronous loads = %llu, synchronous hits = %llu, predictions = %llu, prefetch attempts = %llu, prefetch admissions = %llu, useful prefetches = %llu, wasted prefetches = %llu, adaptive skips = %llu, copy pressure updates = %llu, remaining stops = %llu, controller outcomes = %u/%u, controller updates = %u, prefill Markov bundles = %zu, tensors = %zu, bundles = %zu, direct bytes = %llu, staged bytes = %llu\n",
+        GGML_LOG_INFO("%s: accesses = %llu, hits = %llu, admission attempts = %llu, admissions = %llu, cost rejections = %llu, allocation failures = %llu, evictions = %llu, resident entries = %zu, resident bytes = %zu, staging batches = %llu, async copies = %llu, synchronous loads = %llu, synchronous hits = %llu, residency calls = %llu, all-hit residency calls = %llu, predictions = %llu, prefetch attempts = %llu, prefetch admissions = %llu, next-layer attempts = %llu, next-layer admissions = %llu, useful prefetches = %llu, wasted prefetches = %llu, adaptive skips = %llu, copy pressure updates = %llu, remaining stops = %llu, controller outcomes = %u/%u, controller updates = %u, prefill Markov bundles = %zu, tensors = %zu, bundles = %zu, direct bytes = %llu, staged bytes = %llu\n",
                 __func__,
                 (unsigned long long) stats.accesses,
                 (unsigned long long) stats.hits,
@@ -120,9 +126,13 @@ struct ggml_metal_moe_cache {
                 (unsigned long long) async_copies,
                 (unsigned long long) synchronous_loads,
                 (unsigned long long) synchronous_hits,
+                (unsigned long long) synchronous_require_calls,
+                (unsigned long long) synchronous_all_hit_calls,
                 (unsigned long long) predictions,
                 (unsigned long long) prefetch_attempts,
                 (unsigned long long) prefetch_admissions,
+                (unsigned long long) next_layer_prefetch_attempts,
+                (unsigned long long) next_layer_prefetch_admissions,
                 (unsigned long long) useful_prefetches,
                 (unsigned long long) wasted_prefetches,
                 (unsigned long long) adaptive_skips,
@@ -146,11 +156,13 @@ struct ggml_metal_moe_cache {
         if (buffer) {
             ggml_metal_buffer_free(buffer);
         }
+        [copy_queue release];
     }
 
     ggml_metal_device_t dev;
     size_t capacity;
     ggml_metal_buffer_t buffer = nullptr;
+    id<MTLCommandQueue> copy_queue = nil;
     ggml_moe_cache_slots slots;
     std::mutex mutex;
     std::unordered_map<const ggml_tensor *, ggml_metal_moe_tensor_cache *> tensor_map;
@@ -158,6 +170,7 @@ struct ggml_metal_moe_cache {
     std::vector<std::unique_ptr<ggml_metal_moe_tensor_cache>> tensors;
     std::unordered_map<uint64_t, ggml_metal_moe_bundle_cache *> bundle_map;
     std::vector<std::unique_ptr<ggml_metal_moe_bundle_cache>> bundles;
+    std::vector<ggml_metal_moe_bundle_cache *> layer_bundles;
     uint32_t n_layers = 0;
     size_t preloaded_entries = 0;
     size_t preloaded_bytes = 0;
@@ -173,6 +186,10 @@ struct ggml_metal_moe_cache {
     uint64_t staged_copy_bytes = 0;
     uint64_t synchronous_loads = 0;
     uint64_t synchronous_hits = 0;
+    uint64_t synchronous_require_calls = 0;
+    uint64_t synchronous_all_hit_calls = 0;
+    uint64_t next_layer_prefetch_attempts = 0;
+    uint64_t next_layer_prefetch_admissions = 0;
     uint64_t predictions = 0;
     uint64_t prefetch_attempts = 0;
     uint64_t prefetch_admissions = 0;
@@ -189,8 +206,12 @@ struct ggml_metal_moe_cache {
     bool bundle_enabled = true;
     bool dynamic_layer_budget = true;
     bool direct_blit = true;
+    bool strict_mm = true;
+    bool next_layer_prefetch = false;
     bool preload_complete = false;
     uint32_t remaining_tokens_hint = UINT32_MAX;
+    uint32_t next_layer_min_percent = 4;
+    uint32_t next_layer_max_mib = 4;
     ggml_moe_prefetch_control prefetch_control;
     std::unordered_set<uint64_t> prefetched;
 
@@ -213,7 +234,7 @@ struct ggml_metal_moe_cache {
             [staging_cmd_buf[staging_index] release];
             staging_cmd_buf[staging_index] = nil;
         }
-        copy_cmd_buf = [(id<MTLCommandQueue>) ggml_metal_device_get_queue(dev) commandBuffer];
+        copy_cmd_buf = [copy_queue commandBuffer];
         [copy_cmd_buf retain];
         copy_encoder = [copy_cmd_buf blitCommandEncoder];
         staged_bytes = 0;
@@ -441,6 +462,7 @@ static struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_disabled(void) 
     return {
         false,
         false,
+        false,
         { nullptr, 0 },
         { nullptr, 0 },
         { nullptr, 0 },
@@ -455,7 +477,7 @@ static bool ggml_metal_moe_bundle_has_file_sources(const ggml_metal_moe_bundle_c
 
 ggml_metal_moe_cache_t ggml_metal_moe_cache_init(ggml_metal_device_t dev, size_t capacity_bytes) {
     std::unique_ptr<ggml_metal_moe_cache> cache(new ggml_metal_moe_cache(dev, capacity_bytes));
-    if (!cache->buffer || (!cache->direct_blit &&
+    if (!cache->buffer || !cache->copy_queue || (!cache->direct_blit &&
             (!cache->staging[0] || !cache->staging[1] ||
              !ggml_metal_buffer_is_shared(cache->staging[0]) || !ggml_metal_buffer_is_shared(cache->staging[1])))) {
         return nullptr;
@@ -509,6 +531,20 @@ bool ggml_metal_moe_cache_needs_residency(
     return entry != cache->tensor_map.end() && ggml_metal_moe_bundle_has_file_sources(*entry->second->bundle);
 }
 
+bool ggml_metal_moe_cache_same_bundle(
+        ggml_metal_moe_cache_t cache,
+        const struct ggml_tensor * first,
+        const struct ggml_tensor * second) {
+    if (!cache || !first || !second) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(cache->mutex);
+    const auto first_it = cache->tensor_map.find(first);
+    const auto second_it = cache->tensor_map.find(second);
+    return first_it != cache->tensor_map.end() && second_it != cache->tensor_map.end() &&
+            first_it->second->bundle == second_it->second->bundle;
+}
+
 bool ggml_metal_moe_cache_require(
         ggml_metal_moe_cache_t cache,
         const struct ggml_tensor * tensor,
@@ -528,6 +564,7 @@ bool ggml_metal_moe_cache_require(
     if (!ggml_metal_moe_bundle_has_file_sources(bundle)) {
         return false;
     }
+    ++cache->synchronous_require_calls;
 
     std::vector<uint64_t> required;
     for (uint32_t token = 0; token < n_tokens; ++token) {
@@ -546,6 +583,7 @@ bool ggml_metal_moe_cache_require(
         return false;
     }
 
+    bool needs_copy_wait = false;
     for (uint64_t key : required) {
         const uint32_t expert = (uint32_t) key;
         const auto result = cache->slots.require(key, bundle.expert_size, bundle.layer, required);
@@ -554,6 +592,7 @@ bool ggml_metal_moe_cache_require(
         }
         if (result.hit) {
             ++cache->synchronous_hits;
+            needs_copy_wait = needs_copy_wait || cache->prefetched.count(key) > 0;
             continue;
         }
         if (!result.admitted) {
@@ -562,9 +601,60 @@ bool ggml_metal_moe_cache_require(
         cache->copy_expert(bundle, expert, result.offset);
         cache->set_page_tables(bundle, expert, result.offset);
         ++cache->synchronous_loads;
+        needs_copy_wait = true;
     }
-    cache->commit_copy();
-    cache->wait_for_copy();
+    if (needs_copy_wait) {
+        cache->commit_copy();
+        cache->wait_for_copy();
+    } else {
+        ++cache->synchronous_all_hit_calls;
+    }
+
+    if (cache->next_layer_prefetch && bundle.layer != UINT32_MAX && bundle.layer + 1 < cache->layer_bundles.size()) {
+        auto * next = cache->layer_bundles[bundle.layer + 1];
+        if (next && next->n_experts == bundle.n_experts) {
+            std::vector<uint32_t> experts;
+            experts.reserve(required.size());
+            for (uint64_t key : required) {
+                experts.push_back((uint32_t) key);
+            }
+            const auto predictions = bundle.next_layer_markov->predict(experts);
+            const size_t byte_limit = std::min<size_t>((size_t) cache->next_layer_max_mib * 1024 * 1024, cache->capacity / 128);
+            size_t bytes = 0;
+            std::vector<uint64_t> protected_keys = required;
+            for (const auto & prediction : predictions) {
+                const size_t allocation_size = ggml_metal_moe_align(next->expert_size);
+                if (prediction.total == 0 || (uint64_t) prediction.count * 100 < (uint64_t) prediction.total * cache->next_layer_min_percent ||
+                        bytes >= byte_limit || allocation_size > byte_limit - bytes) {
+                    continue;
+                }
+                const uint64_t key = ggml_metal_moe_cache_key(next->id, prediction.state);
+                if (cache->slots.contains(key)) {
+                    continue;
+                }
+                ++cache->next_layer_prefetch_attempts;
+                const auto result = cache->slots.prefetch(
+                        key,
+                        next->expert_size,
+                        next->layer,
+                        (uint64_t) prediction.count * 1024 / prediction.total,
+                        protected_keys);
+                for (uint64_t evicted : result.evicted) {
+                    cache->invalidate(evicted);
+                }
+                if (!result.admitted) {
+                    continue;
+                }
+                cache->copy_expert(*next, prediction.state, result.offset);
+                cache->set_page_tables(*next, prediction.state, result.offset);
+                cache->prefetched.insert(key);
+                protected_keys.push_back(key);
+                bytes += allocation_size;
+                ++cache->next_layer_prefetch_admissions;
+            }
+            cache->commit_copy();
+        }
+    }
     return true;
 }
 
@@ -591,6 +681,7 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
         return {
             true,
             ggml_metal_moe_bundle_has_file_sources(*entry->bundle),
+            cache->strict_mm,
             ggml_metal_buffer_get_base_id(cache->buffer),
             ggml_metal_buffer_get_base_id(entry->page_table_buffer),
             ggml_metal_buffer_get_base_id(entry->bundle->access_buffer),
@@ -649,6 +740,7 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
         }
         new_bundle->access = (uint32_t *) ggml_metal_buffer_get_base(new_bundle->access_buffer);
         new_bundle->markov.reset(new ggml_moe_markov(n_experts, 8));
+        new_bundle->next_layer_markov.reset(new ggml_moe_markov(n_experts, 4));
         std::fill(new_bundle->access, new_bundle->access + n_experts, 0);
         bundle = new_bundle.get();
     }
@@ -677,6 +769,8 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
         cache->bundles.emplace_back(std::move(new_bundle));
         if (layer != UINT32_MAX) {
             cache->n_layers = std::max(cache->n_layers, layer + 1);
+            cache->layer_bundles.resize(cache->n_layers, nullptr);
+            cache->layer_bundles[layer] = bundle;
             cache->slots.set_group_count(cache->n_layers);
         }
     }
@@ -693,6 +787,7 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
     return {
         true,
         ggml_metal_moe_bundle_has_file_sources(*raw->bundle),
+        cache->strict_mm,
         ggml_metal_buffer_get_base_id(cache->buffer),
         ggml_metal_buffer_get_base_id(raw->page_table_buffer),
         ggml_metal_buffer_get_base_id(raw->bundle->access_buffer),
@@ -713,6 +808,7 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
         uint32_t total;
     };
     std::vector<prediction> predictions;
+    std::vector<std::vector<uint32_t>> routed(cache->bundles.size());
     uint32_t demand_evictions = 0;
     bool observed_routes = false;
 
@@ -749,7 +845,17 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
                 predictions.push_back({ &bundle, predicted.state, predicted.count, predicted.total });
             }
         }
+        routed[bundle.id] = current_experts;
         observed_routes = observed_routes || !current_experts.empty();
+    }
+
+    for (uint32_t layer = 0; layer + 1 < cache->layer_bundles.size(); ++layer) {
+        auto * source = cache->layer_bundles[layer];
+        auto * destination = cache->layer_bundles[layer + 1];
+        if (source && destination && source->n_experts == destination->n_experts &&
+                !routed[source->id].empty() && !routed[destination->id].empty()) {
+            source->next_layer_markov->observe_transition(routed[source->id], routed[destination->id]);
+        }
     }
 
     if (!observed_routes) {

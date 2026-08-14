@@ -504,6 +504,26 @@ ggml_moe_cache_result ggml_moe_cache_policy::prefetch(uint64_t key, size_t size_
     return pimpl->admit(key, size_bytes, group);
 }
 
+ggml_moe_cache_result ggml_moe_cache_policy::prefetch(
+        uint64_t key,
+        size_t size_bytes,
+        uint32_t group,
+        uint64_t predicted_benefit,
+        const std::vector<uint64_t> & protected_keys) {
+    if (pimpl->entries.find(key) != pimpl->entries.end()) {
+        return pimpl->admit(key, size_bytes, group);
+    }
+    if (predicted_benefit != UINT64_MAX && !pimpl->cost_allows(size_bytes, predicted_benefit)) {
+        ++pimpl->stats.cost_rejections;
+        ggml_moe_cache_result result;
+        result.cost_rejected = true;
+        return result;
+    }
+    std::unordered_set<uint64_t> excluded(protected_keys.begin(), protected_keys.end());
+    excluded.insert(key);
+    return pimpl->admit(key, size_bytes, group, excluded);
+}
+
 ggml_moe_cache_result ggml_moe_cache_policy::require(
         uint64_t key,
         size_t size_bytes,
@@ -704,7 +724,8 @@ struct ggml_moe_cache_slots::impl {
             uint64_t key,
             size_t allocation_size,
             uint32_t group,
-            ggml_moe_cache_result policy_result) {
+            ggml_moe_cache_result policy_result,
+            const std::vector<uint64_t> & protected_keys = {}) {
         ggml_moe_cache_slot_result result;
         result.hit = policy_result.hit;
         result.cost_rejected = policy_result.cost_rejected;
@@ -731,7 +752,7 @@ struct ggml_moe_cache_slots::impl {
             }
             while (offset == SIZE_MAX) {
                 uint64_t evicted;
-                if (!policy.evict(evicted)) {
+                if (!policy.evict(evicted, protected_keys)) {
                     break;
                 }
                 release_key(evicted);
@@ -788,6 +809,18 @@ ggml_moe_cache_slot_result ggml_moe_cache_slots::prefetch(uint64_t key, size_t s
     auto policy_result = pimpl->policy.prefetch(key, allocation_size, group, predicted_benefit);
     pimpl->stats.cost_rejections += policy_result.cost_rejected;
     return pimpl->finalize(key, allocation_size, group, std::move(policy_result));
+}
+
+ggml_moe_cache_slot_result ggml_moe_cache_slots::prefetch(
+        uint64_t key,
+        size_t size_bytes,
+        uint32_t group,
+        uint64_t predicted_benefit,
+        const std::vector<uint64_t> & protected_keys) {
+    const size_t allocation_size = pimpl->aligned_size(size_bytes);
+    auto policy_result = pimpl->policy.prefetch(key, allocation_size, group, predicted_benefit, protected_keys);
+    pimpl->stats.cost_rejections += policy_result.cost_rejected;
+    return pimpl->finalize(key, allocation_size, group, std::move(policy_result), protected_keys);
 }
 
 ggml_moe_cache_slot_result ggml_moe_cache_slots::require(
@@ -1125,4 +1158,37 @@ std::vector<ggml_moe_markov_prediction> ggml_moe_markov::observe(const std::vect
     auto ranked = predict(states);
     pimpl->previous = states;
     return ranked;
+}
+
+void ggml_moe_markov::observe_transition(
+        const std::vector<uint32_t> & sources,
+        const std::vector<uint32_t> & destinations) {
+    const uint32_t valid = (uint32_t) std::count_if(destinations.begin(), destinations.end(), [&](uint32_t state) {
+        return state < pimpl->state_count;
+    });
+    for (uint32_t source : sources) {
+        if (source >= pimpl->state_count) {
+            continue;
+        }
+        if (pimpl->totals[source] > 32768) {
+            for (uint32_t destination = 0; destination < pimpl->state_count; ++destination) {
+                pimpl->transitions[(size_t) source * pimpl->state_count + destination] /= 2;
+            }
+            pimpl->totals[source] /= 2;
+        }
+        for (uint32_t destination : destinations) {
+            if (destination >= pimpl->state_count) {
+                continue;
+            }
+            uint16_t & count = pimpl->transitions[(size_t) source * pimpl->state_count + destination];
+            if (count != std::numeric_limits<uint16_t>::max()) {
+                ++count;
+            }
+        }
+        if (pimpl->totals[source] <= std::numeric_limits<uint32_t>::max() - valid) {
+            pimpl->totals[source] += valid;
+        } else {
+            pimpl->totals[source] = std::numeric_limits<uint32_t>::max();
+        }
+    }
 }

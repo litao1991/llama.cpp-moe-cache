@@ -189,6 +189,22 @@ static void test_dynamic_group_budget() {
     assert(cache.group_resident_bytes(2) == 4);
 }
 
+static void test_prefetch_protects_active_entries() {
+    ggml_moe_cache_slots cache(12, 1, 80, 1, 4096, 1);
+
+    cache.prefetch(1, 4);
+    cache.prefetch(2, 4);
+    cache.prefetch(3, 4);
+    const auto result = cache.prefetch(4, 4, UINT32_MAX, UINT64_MAX, { 2, 3 });
+
+    assert(result.admitted);
+    assert(result.evicted.size() == 1);
+    assert(result.evicted[0] == 1);
+    assert(cache.contains(2));
+    assert(cache.contains(3));
+    assert(cache.contains(4));
+}
+
 static void test_layer_budget_waterfill() {
     const std::vector<ggml_moe_layer_candidate> candidates = {
         { 0, 2, 100, 2 },
@@ -320,6 +336,20 @@ static void test_markov_sparse_prefill_seed() {
     assert(predictions[1].state == 3);
 }
 
+static void test_markov_cross_layer_transition() {
+    ggml_moe_markov markov(8, 2);
+
+    markov.observe_transition({ 1, 2 }, { 4, 5 });
+    markov.observe_transition({ 1 }, { 4 });
+    const auto predictions = markov.predict({ 1 });
+
+    assert(predictions.size() == 2);
+    assert(predictions[0].state == 4);
+    assert(predictions[0].count == 2);
+    assert(predictions[0].total == 3);
+    assert(predictions[1].state == 5);
+}
+
 static void test_prefetch_does_not_count_as_access() {
     ggml_moe_cache_slots cache(4, 1, 80, 2);
 
@@ -394,6 +424,7 @@ int main() {
     test_slot_fragmentation_recovery();
     test_group_soft_budget();
     test_dynamic_group_budget();
+    test_prefetch_protects_active_entries();
     test_layer_budget_waterfill();
     test_mobile_capacity_budget();
     test_cost_aware_admission();
@@ -402,6 +433,7 @@ int main() {
     test_markov_prediction();
     test_markov_prefill_seed();
     test_markov_sparse_prefill_seed();
+    test_markov_cross_layer_transition();
     test_prefetch_does_not_count_as_access();
     test_required_set_is_not_evicted();
     test_adaptive_prefetch_control();

@@ -25,6 +25,7 @@ struct ggml_metal_moe_cache_result {
 struct ggml_metal_moe_cache_bindings {
     bool enabled;
     bool strict;
+    bool strict_mm;
     struct ggml_metal_buffer_id weights;
     struct ggml_metal_buffer_id page_table;
     struct ggml_metal_buffer_id access;
@@ -40,6 +41,10 @@ bool ggml_metal_moe_cache_set_source(
 bool ggml_metal_moe_cache_needs_residency(
         ggml_metal_moe_cache_t cache,
         const struct ggml_tensor * tensor);
+bool ggml_metal_moe_cache_same_bundle(
+        ggml_metal_moe_cache_t cache,
+        const struct ggml_tensor * first,
+        const struct ggml_tensor * second);
 bool ggml_metal_moe_cache_require(
         ggml_metal_moe_cache_t cache,
         const struct ggml_tensor * tensor,

@@ -67,6 +67,7 @@ public:
 
     ggml_moe_cache_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX);
     ggml_moe_cache_result prefetch(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, uint64_t predicted_benefit = UINT64_MAX);
+    ggml_moe_cache_result prefetch(uint64_t key, size_t size_bytes, uint32_t group, uint64_t predicted_benefit, const std::vector<uint64_t> & protected_keys);
     ggml_moe_cache_result require(uint64_t key, size_t size_bytes, uint32_t group, const std::vector<uint64_t> & protected_keys);
     bool erase(uint64_t key);
     bool evict(uint64_t & key);
@@ -106,6 +107,7 @@ public:
 
     ggml_moe_cache_slot_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX);
     ggml_moe_cache_slot_result prefetch(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, uint64_t predicted_benefit = UINT64_MAX);
+    ggml_moe_cache_slot_result prefetch(uint64_t key, size_t size_bytes, uint32_t group, uint64_t predicted_benefit, const std::vector<uint64_t> & protected_keys);
     ggml_moe_cache_slot_result require(uint64_t key, size_t size_bytes, uint32_t group, const std::vector<uint64_t> & protected_keys);
     bool erase(uint64_t key);
     void set_group_count(uint32_t group_count);
@@ -170,6 +172,7 @@ public:
     void seed_sparse(const uint32_t * transitions, uint32_t transition_slots, uint32_t prior_strength = 32);
     std::vector<ggml_moe_markov_prediction> predict(const std::vector<uint32_t> & states) const;
     std::vector<ggml_moe_markov_prediction> observe(const std::vector<uint32_t> & states);
+    void observe_transition(const std::vector<uint32_t> & sources, const std::vector<uint32_t> & destinations);
 
 private:
     struct impl;
