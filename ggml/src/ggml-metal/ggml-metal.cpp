@@ -625,6 +625,49 @@ void ggml_backend_metal_set_abort_callback(ggml_backend_t backend, ggml_abort_ca
     ggml_metal_set_abort_callback(ctx, abort_callback, user_data);
 }
 
+bool ggml_backend_metal_set_moe_cache(ggml_backend_t backend, size_t capacity_bytes) {
+    GGML_ASSERT(ggml_backend_is_metal(backend));
+
+    ggml_metal_t ctx = (ggml_metal_t)backend->context;
+
+    return ggml_metal_set_moe_cache(ctx, capacity_bytes);
+}
+
+static bool ggml_backend_metal_prepare_moe_cache(ggml_backend_t backend, size_t capacity_bytes) {
+    return ggml_metal_prepare_moe_cache((ggml_metal_t) backend->context, capacity_bytes);
+}
+
+static bool ggml_backend_metal_finalize_moe_cache(ggml_backend_t backend) {
+    return ggml_metal_finalize_moe_cache((ggml_metal_t) backend->context);
+}
+
+static bool ggml_backend_metal_set_moe_source(
+        ggml_backend_t backend,
+        const struct ggml_tensor * tensor,
+        int fd,
+        uint64_t file_offset,
+        uint64_t byte_size,
+        int32_t type) {
+    GGML_ASSERT(ggml_backend_is_metal(backend));
+    return ggml_metal_set_moe_source((ggml_metal_t) backend->context, tensor, fd, file_offset, byte_size, type);
+}
+
+bool ggml_backend_metal_set_moe_profile(ggml_backend_t backend, bool enabled) {
+    GGML_ASSERT(ggml_backend_is_metal(backend));
+
+    ggml_metal_t ctx = (ggml_metal_t)backend->context;
+
+    return ggml_metal_set_moe_profile(ctx, enabled);
+}
+
+void ggml_backend_metal_reset_moe_profile(ggml_backend_t backend) {
+    GGML_ASSERT(ggml_backend_is_metal(backend));
+
+    ggml_metal_t ctx = (ggml_metal_t)backend->context;
+
+    ggml_metal_reset_moe_profile(ctx);
+}
+
 bool ggml_backend_metal_supports_family(ggml_backend_t backend, int family) {
     GGML_ASSERT(ggml_backend_is_metal(backend));
 
@@ -871,6 +914,24 @@ static ggml_backend_feature * ggml_backend_metal_get_features(ggml_backend_reg_t
 static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_metal_get_features;
+    }
+    if (strcmp(name, "ggml_backend_metal_set_moe_cache") == 0) {
+        return (void *)ggml_backend_metal_set_moe_cache;
+    }
+    if (strcmp(name, "ggml_backend_metal_prepare_moe_cache") == 0) {
+        return (void *)ggml_backend_metal_prepare_moe_cache;
+    }
+    if (strcmp(name, "ggml_backend_metal_finalize_moe_cache") == 0) {
+        return (void *)ggml_backend_metal_finalize_moe_cache;
+    }
+    if (strcmp(name, "ggml_backend_metal_set_moe_source") == 0) {
+        return (void *)ggml_backend_metal_set_moe_source;
+    }
+    if (strcmp(name, "ggml_backend_metal_set_moe_profile") == 0) {
+        return (void *)ggml_backend_metal_set_moe_profile;
+    }
+    if (strcmp(name, "ggml_backend_metal_reset_moe_profile") == 0) {
+        return (void *)ggml_backend_metal_reset_moe_profile;
     }
 
     return NULL;

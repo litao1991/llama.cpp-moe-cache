@@ -660,6 +660,8 @@ struct llama_model {
 
     uint32_t n_gpu_layers() const;
     llama_split_mode split_mode() const;
+    size_t moe_cache_bytes() const;
+    bool register_moe_sources(ggml_backend_t backend) const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 

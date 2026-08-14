@@ -5,6 +5,8 @@
 
 #import "ggml-metal-impl.h"
 #import "ggml-metal-common.h"
+#import "ggml-metal-moe-cache.h"
+#import "ggml-metal-moe-profile.h"
 #import "ggml-metal-ops.h"
 
 #import <Foundation/Foundation.h>
@@ -79,6 +81,9 @@ struct ggml_metal {
     // error state - set when a command buffer fails during synchronize
     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
     bool has_error;
+
+    ggml_metal_moe_cache_t moe_cache;
+    ggml_metal_moe_profile_t moe_profile;
 };
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
@@ -170,6 +175,8 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     }
 
     res->has_error = false;
+    res->moe_cache = NULL;
+    res->moe_profile = NULL;
 
     res->gf = nil;
     res->encode_async = nil;
@@ -188,6 +195,13 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
 void ggml_metal_free(ggml_metal_t ctx) {
     GGML_LOG_INFO("%s: deallocating\n", __func__);
+
+    if (ctx->moe_cache) {
+        ggml_metal_moe_cache_free(ctx->moe_cache);
+    }
+    if (ctx->moe_profile) {
+        ggml_metal_moe_profile_free(ctx->moe_profile);
+    }
 
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
         if (ctx->cmd_bufs[i].obj) {
@@ -234,6 +248,92 @@ void ggml_metal_free(ggml_metal_t ctx) {
 
 const char * ggml_metal_get_name(ggml_metal_t ctx) {
     return ctx->name;
+}
+
+bool ggml_metal_set_moe_cache(ggml_metal_t ctx, size_t capacity_bytes) {
+    if (ctx->moe_cache) {
+        if (ggml_metal_moe_cache_get_capacity(ctx->moe_cache) == capacity_bytes) {
+            return true;
+        }
+        ggml_metal_synchronize(ctx);
+        const bool resized = ggml_metal_moe_cache_resize(ctx->moe_cache, capacity_bytes);
+        if (resized) {
+            GGML_LOG_INFO("%s: resized expert cache to %.2f MiB\n", __func__, capacity_bytes / 1024.0 / 1024.0);
+        }
+        return resized;
+    }
+
+    ggml_metal_synchronize(ctx);
+    ggml_metal_moe_profile_finish(ctx->moe_profile);
+
+    if (capacity_bytes == 0) {
+        return true;
+    }
+
+    ctx->moe_cache = ggml_metal_moe_cache_init(ctx->dev, capacity_bytes);
+    if (!ctx->moe_cache) {
+        GGML_LOG_ERROR("%s: failed to allocate %.2f MiB\n", __func__, capacity_bytes / 1024.0 / 1024.0);
+        return false;
+    }
+    ggml_metal_moe_cache_attach_profile(ctx->moe_cache, ctx->moe_profile);
+    ggml_metal_moe_cache_preload(ctx->moe_cache, ctx->moe_profile);
+    ggml_metal_moe_profile_free(ctx->moe_profile);
+    ctx->moe_profile = NULL;
+
+    GGML_LOG_INFO("%s: allocated %.2f MiB expert cache\n", __func__, capacity_bytes / 1024.0 / 1024.0);
+    return true;
+}
+
+bool ggml_metal_prepare_moe_cache(ggml_metal_t ctx, size_t capacity_bytes) {
+    if (!ctx || ctx->moe_cache || capacity_bytes == 0) {
+        return false;
+    }
+    ctx->moe_cache = ggml_metal_moe_cache_init(ctx->dev, capacity_bytes);
+    return ctx->moe_cache != NULL;
+}
+
+bool ggml_metal_finalize_moe_cache(ggml_metal_t ctx) {
+    if (!ctx || !ctx->moe_cache) {
+        return false;
+    }
+    ggml_metal_moe_cache_attach_profile(ctx->moe_cache, ctx->moe_profile);
+    ggml_metal_moe_cache_preload(ctx->moe_cache, ctx->moe_profile);
+    ggml_metal_moe_profile_free(ctx->moe_profile);
+    ctx->moe_profile = NULL;
+    return true;
+}
+
+bool ggml_metal_set_moe_source(
+        ggml_metal_t ctx,
+        const struct ggml_tensor * tensor,
+        int fd,
+        uint64_t file_offset,
+        uint64_t byte_size,
+        int32_t type) {
+    struct ggml_metal_moe_expert_source source = { fd, file_offset, byte_size, type };
+    return ctx->moe_cache && ggml_metal_moe_cache_set_source(
+            ctx->moe_cache, tensor, source);
+}
+
+bool ggml_metal_set_moe_profile(ggml_metal_t ctx, bool enabled) {
+    ggml_metal_synchronize(ctx);
+    if (ctx->moe_profile) {
+        ggml_metal_moe_profile_finish(ctx->moe_profile);
+        ggml_metal_moe_profile_free(ctx->moe_profile);
+        ctx->moe_profile = NULL;
+    }
+
+    if (!enabled) {
+        return true;
+    }
+
+    ctx->moe_profile = ggml_metal_moe_profile_init(ctx->dev);
+    return ctx->moe_profile != NULL;
+}
+
+void ggml_metal_reset_moe_profile(ggml_metal_t ctx) {
+    ggml_metal_synchronize(ctx);
+    ggml_metal_moe_profile_reset(ctx->moe_profile);
 }
 
 void ggml_metal_synchronize(ggml_metal_t ctx) {
@@ -292,6 +392,8 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
 
         [ctx->cmd_bufs_ext removeAllObjects];
     }
+
+    ggml_metal_moe_cache_update(ctx->moe_cache);
 }
 
 static struct ggml_metal_buffer_id ggml_metal_get_buffer_id(const struct ggml_tensor * t) {
@@ -458,6 +560,88 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
     // tests on M1 Pro and M2 Ultra using LLaMA models, show that optimal values for n_cb are 1 or 2
 
     @autoreleasepool {
+        bool strict_moe = false;
+        if (ctx->moe_cache) {
+            for (int i = 0; i < gf->n_nodes; ++i) {
+                const struct ggml_tensor * node = gf->nodes[i];
+                if (node->op == GGML_OP_MUL_MAT_ID && ggml_metal_moe_cache_needs_residency(ctx->moe_cache, node->src[0])) {
+                    strict_moe = true;
+                    break;
+                }
+            }
+        }
+        if (strict_moe) {
+            id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
+            int start = 0;
+            while (start < gf->n_nodes) {
+                int end = start;
+                while (end < gf->n_nodes) {
+                    const struct ggml_tensor * node = gf->nodes[end];
+                    if (node->op == GGML_OP_MUL_MAT_ID && ggml_metal_moe_cache_needs_residency(ctx->moe_cache, node->src[0])) {
+                        break;
+                    }
+                    ++end;
+                }
+
+                if (end > start) {
+                    id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+                    ggml_metal_op_t op_ctx = ggml_metal_op_init(
+                            ctx->dev, cmd_buf, ctx->moe_cache, ctx->moe_profile, gf,
+                            start, end, ctx->use_fusion, false, ctx->capture_compute,
+                            ctx->debug_graph, ctx->debug_fusion);
+                    for (int i = 0; i < ggml_metal_op_n_nodes(op_ctx); ++i) {
+                        const int encoded = ggml_metal_op_encode(op_ctx, i);
+                        if (encoded == 0) {
+                            break;
+                        }
+                        i += encoded - 1;
+                    }
+                    ggml_metal_op_free(op_ctx);
+                    [cmd_buf commit];
+                    [cmd_buf waitUntilCompleted];
+                    if ([cmd_buf status] != MTLCommandBufferStatusCompleted) {
+                        return GGML_STATUS_FAILED;
+                    }
+                }
+
+                if (end == gf->n_nodes) {
+                    break;
+                }
+                struct ggml_tensor * node = gf->nodes[end];
+                ggml_backend_buffer_t ids_backend_buffer = node->src[2]->view_src ? node->src[2]->view_src->buffer : node->src[2]->buffer;
+                ggml_metal_buffer_t ids_buffer = ids_backend_buffer ? ids_backend_buffer->context : NULL;
+                if (!ids_buffer || !ggml_metal_buffer_is_shared(ids_buffer) ||
+                        !ggml_metal_moe_cache_require(
+                            ctx->moe_cache,
+                            node->src[0],
+                            (const int32_t *) node->src[2]->data,
+                            (uint32_t) node->src[2]->ne[1],
+                            (uint32_t) node->src[2]->ne[0],
+                            node->src[2]->nb[1])) {
+                    GGML_LOG_ERROR("%s: failed to make experts resident for tensor '%s'\n", __func__, node->src[0]->name);
+                    return GGML_STATUS_FAILED;
+                }
+
+                id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+                ggml_metal_op_t op_ctx = ggml_metal_op_init(
+                        ctx->dev, cmd_buf, ctx->moe_cache, ctx->moe_profile, gf,
+                        end, end + 1, ctx->use_fusion, false, ctx->capture_compute,
+                        ctx->debug_graph, ctx->debug_fusion);
+                if (ggml_metal_op_n_nodes(op_ctx) > 0) {
+                    ggml_metal_op_encode(op_ctx, 0);
+                }
+                ggml_metal_op_free(op_ctx);
+                [cmd_buf commit];
+                [cmd_buf waitUntilCompleted];
+                if ([cmd_buf status] != MTLCommandBufferStatusCompleted) {
+                    return GGML_STATUS_FAILED;
+                }
+                start = end + 1;
+            }
+            ggml_metal_moe_cache_update(ctx->moe_cache);
+            return GGML_STATUS_SUCCESS;
+        }
+
         ctx->gf = gf;
 
         ctx->n_nodes_0 = MIN(n_main, gf->n_nodes);
@@ -695,6 +879,8 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
         ggml_metal_op_t ctx_op = ggml_metal_op_init(
             ctx->dev,
             cmd_buf,
+            ctx->moe_cache,
+            ctx->moe_profile,
             ctx->gf,
             idx_start,
             idx_end,

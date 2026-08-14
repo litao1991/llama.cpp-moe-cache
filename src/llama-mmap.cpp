@@ -487,6 +487,29 @@ struct llama_mmap::impl {
         }
     }
 
+    void advise(size_t first, size_t last, int advice) {
+        first = std::min(first, size);
+        last  = std::min(last,  size);
+        if (last <= first) {
+            return;
+        }
+
+        const size_t page_size = (size_t) sysconf(_SC_PAGESIZE);
+        first -= first % page_size;
+        const int result = posix_madvise((uint8_t *) addr + first, last - first, advice);
+        if (result != 0) {
+            LLAMA_LOG_WARN("posix_madvise failed: %s\n", strerror(result));
+        }
+    }
+
+    void prefetch_range(size_t first, size_t last) {
+        advise(first, last, POSIX_MADV_WILLNEED);
+    }
+
+    void advise_random(size_t first, size_t last) {
+        advise(first, last, POSIX_MADV_RANDOM);
+    }
+
     void unmap_fragment(size_t first, size_t last) {
         int page_size = sysconf(_SC_PAGESIZE);
         align_range(&first, &last, page_size);
@@ -582,6 +605,16 @@ struct llama_mmap::impl {
         GGML_UNUSED(last);
     }
 
+    void prefetch_range(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+    }
+
+    void advise_random(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+    }
+
     ~impl() {
         if (hMapping) {
             if (addr) {
@@ -611,6 +644,16 @@ struct llama_mmap::impl {
 
         throw std::runtime_error("mmap not supported");
     }
+
+    void prefetch_range(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+    }
+
+    void advise_random(size_t first, size_t last) {
+        GGML_UNUSED(first);
+        GGML_UNUSED(last);
+    }
 #endif
 
     void * addr;
@@ -623,6 +666,8 @@ llama_mmap::~llama_mmap() = default;
 size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
 
+void llama_mmap::prefetch_range(size_t first, size_t last) { pimpl->prefetch_range(first, last); }
+void llama_mmap::advise_random(size_t first, size_t last) { pimpl->advise_random(first, last); }
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
 
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)

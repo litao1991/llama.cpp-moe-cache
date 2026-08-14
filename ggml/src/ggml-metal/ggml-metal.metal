@@ -10382,12 +10382,58 @@ kernel void kernel_mul_mm(
 
 #endif // GGML_METAL_HAS_TENSOR
 
+static inline void moe_sparse_transition_add(
+        device atomic_uint * row,
+        uint transition_slots,
+        uint destination) {
+    const uint destination_bits = destination + 1;
+    uint minimum_count = 0xffffu;
+    uint minimum_slot = 0;
+
+    for (uint slot = 0; slot < transition_slots; ++slot) {
+        uint packed = atomic_load_explicit(row + slot, memory_order_relaxed);
+        const uint stored_destination = packed & 0xffffu;
+        if (stored_destination == destination_bits) {
+            while ((packed & 0xffffu) == destination_bits) {
+                const uint count = min(packed >> 16, 0xfffeu) + 1;
+                const uint desired = (count << 16) | destination_bits;
+                if (atomic_compare_exchange_weak_explicit(
+                        row + slot, &packed, desired, memory_order_relaxed, memory_order_relaxed)) {
+                    return;
+                }
+            }
+        }
+        if (stored_destination == 0) {
+            uint expected = 0;
+            if (atomic_compare_exchange_weak_explicit(
+                    row + slot, &expected, 0x10000u | destination_bits, memory_order_relaxed, memory_order_relaxed)) {
+                return;
+            }
+            packed = expected;
+        }
+        const uint count = packed >> 16;
+        if (count < minimum_count) {
+            minimum_count = count;
+            minimum_slot = slot;
+        }
+    }
+
+    uint expected = atomic_load_explicit(row + minimum_slot, memory_order_relaxed);
+    const uint replacement_count = min(expected >> 16, 0xfffeu) + 1;
+    const uint desired = (replacement_count << 16) | destination_bits;
+    atomic_compare_exchange_weak_explicit(
+            row + minimum_slot, &expected, desired, memory_order_relaxed, memory_order_relaxed);
+}
+
 template<short ne20> // n_expert_used
 kernel void kernel_mul_mm_id_map0(
         constant ggml_metal_kargs_mul_mm_id_map0 & args,
         device  const char * src2,
         device        char * htpe,
         device        char * hids,
+        device atomic_uint * moe_profile,
+        device atomic_uint * moe_transitions,
+        device        uint * moe_previous,
         threadgroup   char * shmem [[threadgroup(0)]],
         ushort tpitg[[thread_position_in_threadgroup]],
         ushort   ntg[[threads_per_threadgroup]]) {
@@ -10429,11 +10475,41 @@ kernel void kernel_mul_mm_id_map0(
             n_all += sel > 0;
         }
 
+        if (args.moe_transitions && i21 + tpitg < args.ne21) {
+            const int token = i21 + tpitg;
+            device const int32_t * current = (device const int32_t *) (src2 + token*args.nb21);
+            device const int32_t * previous = token > 0 ? (device const int32_t *) (src2 + (token - 1)*args.nb21) : nullptr;
+            #pragma unroll(ne20)
+            for (short source_index = 0; source_index < ne20; ++source_index) {
+                const uint source = token > 0 ? (uint) previous[source_index] : moe_previous[source_index];
+                if (source >= (uint) args.ne02) {
+                    continue;
+                }
+                #pragma unroll(ne20)
+                for (short destination_index = 0; destination_index < ne20; ++destination_index) {
+                    const int32_t destination = current[destination_index];
+                    if (destination >= 0 && destination < args.ne02) {
+                        moe_sparse_transition_add(
+                                moe_transitions + (ulong) source*args.moe_transition_slots,
+                                args.moe_transition_slots,
+                                destination);
+                    }
+                }
+            }
+        }
+
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
     device uint32_t * tpe_u32 = (device uint32_t *) (htpe);
     tpe_u32[ide] = n_all;
+    if (args.moe_profile) {
+        atomic_fetch_add_explicit(moe_profile + ide, n_all, memory_order_relaxed);
+    }
+    if (args.moe_transitions && ide < ne20) {
+        device const int32_t * last = (device const int32_t *) (src2 + (args.ne21 - 1)*args.nb21);
+        moe_previous[ide] = last[ide];
+    }
 }
 
 typedef decltype(kernel_mul_mm_id_map0<1>) kernel_mul_mm_id_map0_t;
@@ -10930,6 +11006,10 @@ kernel void kernel_mul_mv_id(
         device const char * src1,
         device       char * dst,
         device const char * ids,
+        device const char * moe_weights,
+        device const uint64_t * moe_page_table,
+        device atomic_uint * moe_access,
+        device atomic_uint * moe_profile,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiitg[[thread_index_in_threadgroup]],
@@ -10942,6 +11022,10 @@ kernel void kernel_mul_mv_id(
 
     const int32_t i02 = ((device const int32_t *) (ids + iid1*args.nbi1))[idx];
 
+    if (args.moe_profile && tgpig.x == 0 && tgpig.y == 0 && tiitg == 0) {
+        atomic_fetch_add_explicit(moe_profile + i02, 1, memory_order_relaxed);
+    }
+
     const int64_t i11 = idx % args.ne11;
     const int64_t i12 = iid1;
 
@@ -10949,6 +11033,17 @@ kernel void kernel_mul_mv_id(
     const int64_t i2 = i12;
 
     device const char * src0_cur = src0s + i02*args.nb02;
+    if (args.moe_cache) {
+        const uint64_t offset = moe_page_table[i02];
+        if (offset != ~uint64_t(0)) {
+            src0_cur = moe_weights + offset;
+        } else if (args.moe_strict) {
+            return;
+        }
+        if (tiitg == 0) {
+            atomic_store_explicit(moe_access + i02, 1, memory_order_relaxed);
+        }
+    }
     device const char * src1_cur = src1  + i11*args.nb11 + i12*args.nb12;
 
     device char * dst_cur = dst + (i1*args.ne0 + i2*args.ne1*args.ne0)*sizeof(float);

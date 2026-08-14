@@ -28,6 +28,7 @@ actor LlamaContext {
     private var sampling: UnsafeMutablePointer<llama_sampler>
     private var batch: llama_batch
     private var tokens_list: [llama_token]
+    private var moeCacheCapacityMiB = 256
     var is_done: Bool = false
 
     /// This variable is used to store temporarily invalid cchars
@@ -63,6 +64,10 @@ actor LlamaContext {
         llama_backend_init()
         var model_params = llama_model_default_params()
 
+#if os(iOS) && !targetEnvironment(simulator)
+        model_params.moe_cache_bytes = 256 * 1024 * 1024
+#endif
+
 #if targetEnvironment(simulator)
         model_params.n_gpu_layers = 0
         print("Running on simulator, force use n_gpu_layers = 0")
@@ -78,6 +83,12 @@ actor LlamaContext {
 
         var ctx_params = llama_context_default_params()
         ctx_params.n_ctx = 2048
+        ctx_params.n_batch = 512
+        ctx_params.n_ubatch = 128
+        ctx_params.n_seq_max = 1
+        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED
+        ctx_params.type_k = GGML_TYPE_Q8_0
+        ctx_params.type_v = GGML_TYPE_Q8_0
         ctx_params.n_threads       = Int32(n_threads)
         ctx_params.n_threads_batch = Int32(n_threads)
 
@@ -88,6 +99,20 @@ actor LlamaContext {
         }
 
         return LlamaContext(model: model, context: context)
+    }
+
+    func handleMemoryWarning() {
+        let mib = 1024 * 1024
+        let capacity = moeCacheCapacityMiB > 128 ? 128 : 0
+        if llama_set_moe_cache(context, capacity * mib) {
+            moeCacheCapacityMiB = capacity
+        }
+    }
+
+    func handleBackground() {
+        if llama_set_moe_cache(context, 0) {
+            moeCacheCapacityMiB = 0
+        }
     }
 
     func model_info() -> String {
