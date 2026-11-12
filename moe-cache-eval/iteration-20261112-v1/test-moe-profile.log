@@ -1,0 +1,240 @@
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x1013d2a40 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x1013d6c40 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: loaded in 0.010 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0 (Apple M5)
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 26800.60 MB
+ggml_metal_moe_profile_finish: tensors = 5, logical profiles = 3, expert selections = 7
+ggml_metal_moe_profile: tensor = test.experts, experts = 4, selections = 7, active = 1, top = 2:7
+ggml_metal_moe_profile: tensor = test.experts.2, experts = 3, selections = 0, active = 0, top =
+ggml_metal_moe_profile: tensor = blk.0.ffn_gate_exps.weight, experts = 4, selections = 0, active = 0, top =
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x1013dc6c0 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x1013dc6c0 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: loaded in 0.003 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0 (Apple M5)
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 26800.60 MB
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x1013dc300 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0x1013a8000 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: loaded in 0.003 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0 (Apple M5)
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 26800.60 MB
+ggml_metal_moe_cache_init: shared expert cache = 1.00 MiB, file reads write directly to cache slots
+~ggml_metal_moe_cache: accesses = 0, hits = 0, admission attempts = 0, admissions = 0, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 0, resident bytes = 0, staging batches = 0, async copies = 0, synchronous loads = 0, synchronous hits = 0, predictions = 0, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 0, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 0, host copy bytes = 0, read failures = 0
+ggml_metal_device_init: testing tensor API for f16 support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0xc58920000 | th_max = 1024 | th_width =   32
+ggml_metal_device_init: testing tensor API for bfloat support
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'dummy_kernel', name = 'dummy_kernel'
+ggml_metal_library_compile_pipeline: loaded dummy_kernel                                  0xc58920000 | th_max = 1024 | th_width =   32
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: loaded in 0.003 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0 (Apple M5)
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple10  (1010)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = true
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 26800.60 MB
+ggml_metal_moe_cache_init: shared expert cache = 0.02 MiB, file reads write directly to cache slots
+copy_part: failed to read expert 3 from 'blk.0.ffn_down_exps.weight' at offset 796
+~ggml_metal_moe_cache: accesses = 0, hits = 0, admission attempts = 3, admissions = 3, cost rejections = 0, allocation failures = 0, evictions = 1, resident entries = 1, resident bytes = 12288, staging batches = 0, async copies = 0, synchronous loads = 5, synchronous hits = 2, predictions = 0, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 0, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 1340, host copy bytes = 0, read failures = 1
+ggml_metal_free: deallocating
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'kernel_mul_mv_id_f32_f32_4', name = 'kernel_mul_mv_id_f32_f32_4_nsg=1'
+ggml_metal_library_compile_pipeline: loaded kernel_mul_mv_id_f32_f32_4_nsg=1              0xc58920380 | th_max = 1024 | th_width =   32
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 4, hits = 4, admission attempts = 2, admissions = 2, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 2, resident bytes = 98304, staging batches = 0, async copies = 0, synchronous loads = 2, synchronous hits = 2, predictions = 2, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 98304, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'kernel_mul_mm_id_map0_ne20_2', name = 'kernel_mul_mm_id_map0_ne20_2_ne02=4'
+ggml_metal_library_compile_pipeline: loaded kernel_mul_mm_id_map0_ne20_2_ne02=4           0xc58920700 | th_max = 1024 | th_width =   32
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'kernel_mul_mm_id_f32_f32', name = 'kernel_mul_mm_id_f32_f32_bci=0'
+ggml_metal_library_compile_pipeline: loaded kernel_mul_mm_id_f32_f32_bci=0                0xc58920a80 | th_max = 1024 | th_width =   32
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 8, hits = 8, admission attempts = 4, admissions = 4, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 4, resident bytes = 196608, staging batches = 0, async copies = 0, synchronous loads = 4, synchronous hits = 4, predictions = 4, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 196608, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 8, hits = 8, admission attempts = 4, admissions = 4, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 4, resident bytes = 196608, staging batches = 0, async copies = 0, synchronous loads = 4, synchronous hits = 20, predictions = 4, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 196608, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'kernel_mul_mv_id_q4_K_f32', name = 'kernel_mul_mv_id_q4_K_f32_nsg=2'
+ggml_metal_library_compile_pipeline: loaded kernel_mul_mv_id_q4_K_f32_nsg=2               0xc58920e00 | th_max = 1024 | th_width =   32
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 4, hits = 4, admission attempts = 2, admissions = 2, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 2, resident bytes = 73728, staging batches = 0, async copies = 0, synchronous loads = 2, synchronous hits = 2, predictions = 2, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 55296, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'kernel_mul_mm_id_q4_K_f32', name = 'kernel_mul_mm_id_q4_K_f32_bci=0'
+ggml_metal_library_compile_pipeline: loaded kernel_mul_mm_id_q4_K_f32_bci=0               0xc58921180 | th_max = 1024 | th_width =   32
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 8, hits = 8, admission attempts = 4, admissions = 4, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 4, resident bytes = 147456, staging batches = 0, async copies = 0, synchronous loads = 4, synchronous hits = 4, predictions = 4, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 110592, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 8, hits = 8, admission attempts = 4, admissions = 4, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 4, resident bytes = 147456, staging batches = 0, async copies = 0, synchronous loads = 4, synchronous hits = 20, predictions = 4, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 110592, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'kernel_mul_mv_id_q5_K_f32', name = 'kernel_mul_mv_id_q5_K_f32_nsg=2'
+ggml_metal_library_compile_pipeline: loaded kernel_mul_mv_id_q5_K_f32_nsg=2               0xc58921500 | th_max = 1024 | th_width =   32
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 4, hits = 4, admission attempts = 2, admissions = 2, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 2, resident bytes = 73728, staging batches = 0, async copies = 0, synchronous loads = 2, synchronous hits = 2, predictions = 2, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 67584, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'kernel_mul_mm_id_q5_K_f32', name = 'kernel_mul_mm_id_q5_K_f32_bci=0'
+ggml_metal_library_compile_pipeline: loaded kernel_mul_mm_id_q5_K_f32_bci=0               0xc58921880 | th_max = 1024 | th_width =   32
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 8, hits = 8, admission attempts = 4, admissions = 4, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 4, resident bytes = 147456, staging batches = 0, async copies = 0, synchronous loads = 4, synchronous hits = 4, predictions = 4, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 135168, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 8, hits = 8, admission attempts = 4, admissions = 4, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 4, resident bytes = 147456, staging batches = 0, async copies = 0, synchronous loads = 4, synchronous hits = 20, predictions = 4, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 135168, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'kernel_mul_mv_id_q6_K_f32', name = 'kernel_mul_mv_id_q6_K_f32_nsg=2'
+ggml_metal_library_compile_pipeline: loaded kernel_mul_mv_id_q6_K_f32_nsg=2               0xc58921c00 | th_max = 1024 | th_width =   32
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 4, hits = 4, admission attempts = 2, admissions = 2, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 2, resident bytes = 98304, staging batches = 0, async copies = 0, synchronous loads = 2, synchronous hits = 2, predictions = 2, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 80640, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_library_compile_pipeline: compiling pipeline: base = 'kernel_mul_mm_id_q6_K_f32', name = 'kernel_mul_mm_id_q6_K_f32_bci=0'
+ggml_metal_library_compile_pipeline: loaded kernel_mul_mm_id_q6_K_f32_bci=0               0xc58921f80 | th_max = 1024 | th_width =   32
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 8, hits = 8, admission attempts = 4, admissions = 4, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 4, resident bytes = 196608, staging batches = 0, async copies = 0, synchronous loads = 4, synchronous hits = 4, predictions = 4, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 161280, host copy bytes = 0, read failures = 0
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M5
+ggml_metal_init: picking default device: Apple M5
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+ggml_metal_moe_cache_init: shared expert cache = 0.19 MiB, file reads write directly to cache slots
+ggml_metal_free: deallocating
+~ggml_metal_moe_cache: accesses = 8, hits = 8, admission attempts = 4, admissions = 4, cost rejections = 0, allocation failures = 0, evictions = 0, resident entries = 4, resident bytes = 196608, staging batches = 0, async copies = 0, synchronous loads = 4, synchronous hits = 20, predictions = 4, prefetch attempts = 0, prefetch admissions = 0, useful prefetches = 0, wasted prefetches = 0, adaptive skips = 0, copy pressure updates = 0, remaining stops = 0, controller outcomes = 0/0, controller updates = 2, prefill Markov bundles = 0, tensors = 3, bundles = 1, direct bytes = 0, staged bytes = 0
+~ggml_metal_moe_cache: shared cache, file read bytes = 161280, host copy bytes = 0, read failures = 0

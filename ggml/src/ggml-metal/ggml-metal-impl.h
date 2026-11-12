@@ -534,6 +534,7 @@ typedef struct {
     int32_t  ne1;
     int16_t  r2;
     int16_t  r3;
+    uint32_t moe_strict;
 } ggml_metal_kargs_mul_mm_id;
 
 typedef struct {

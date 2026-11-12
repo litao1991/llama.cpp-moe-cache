@@ -1,0 +1,1334 @@
+{
+  "model_path": "/Users/litao/Documents/工具/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+  "git_commit": "910fa24c5b5096badc31fa7072daa15ae39ff4b6",
+  "fingerprints": {
+    "build/bin/llama-completion": "71a329c85fbb01fc68cfd03f8b968da81b8cfbf4340fc8201868c573681c0da6",
+    "scripts/moe-cache-iteration-eval.py": "66aea2379f4a3b4a7e3eec7a3e6076e056864eee58829b8c36d635f8246f5457",
+    "scripts/moe-cache-budget-eval.py": "87674728366b33511a67c728b042bb1ab571c357d013d6ffbb1e59095e44a4ac",
+    "build/bin/libggml-base.0.19.0.dylib": "f40abebc0e49bce5f48bddeab8af37d94029fa6bac3e449e8b8384eccb5d5f4d",
+    "build/bin/libggml-base.0.dylib": "f40abebc0e49bce5f48bddeab8af37d94029fa6bac3e449e8b8384eccb5d5f4d",
+    "build/bin/libggml-base.dylib": "f40abebc0e49bce5f48bddeab8af37d94029fa6bac3e449e8b8384eccb5d5f4d",
+    "build/bin/libggml-blas.0.19.0.dylib": "4a92f41508b2cbcdfb77e7687976521c8f4caca8af46a10dd528f3ec54a2ef7d",
+    "build/bin/libggml-blas.0.dylib": "4a92f41508b2cbcdfb77e7687976521c8f4caca8af46a10dd528f3ec54a2ef7d",
+    "build/bin/libggml-blas.dylib": "4a92f41508b2cbcdfb77e7687976521c8f4caca8af46a10dd528f3ec54a2ef7d",
+    "build/bin/libggml-cpu.0.19.0.dylib": "23fd4bcb4d2c58b80385d4190e524ef3ba41b2dd7b3af2e3726ed9244a8af6ab",
+    "build/bin/libggml-cpu.0.dylib": "23fd4bcb4d2c58b80385d4190e524ef3ba41b2dd7b3af2e3726ed9244a8af6ab",
+    "build/bin/libggml-cpu.dylib": "23fd4bcb4d2c58b80385d4190e524ef3ba41b2dd7b3af2e3726ed9244a8af6ab",
+    "build/bin/libggml-metal.0.19.0.dylib": "322541f9a76243c1592c8abdc7ab5050347bfcb0ec373ea9610af3b59c0faca9",
+    "build/bin/libggml-metal.0.dylib": "322541f9a76243c1592c8abdc7ab5050347bfcb0ec373ea9610af3b59c0faca9",
+    "build/bin/libggml-metal.dylib": "322541f9a76243c1592c8abdc7ab5050347bfcb0ec373ea9610af3b59c0faca9",
+    "build/bin/libggml.0.19.0.dylib": "1215acff930c685fab9b2db5c8c10d3813dd27c8ae4d61af2b6a92ad6dcf6bf4",
+    "build/bin/libggml.0.dylib": "1215acff930c685fab9b2db5c8c10d3813dd27c8ae4d61af2b6a92ad6dcf6bf4",
+    "build/bin/libggml.dylib": "1215acff930c685fab9b2db5c8c10d3813dd27c8ae4d61af2b6a92ad6dcf6bf4",
+    "build/bin/libllama-common.0.0.10326.dylib": "8a7aab5ef512f48e06b9bd8fe5308ea530dbf8af97c3b3014edd2c32cab3dcc5",
+    "build/bin/libllama-common.0.dylib": "8a7aab5ef512f48e06b9bd8fe5308ea530dbf8af97c3b3014edd2c32cab3dcc5",
+    "build/bin/libllama-common.dylib": "8a7aab5ef512f48e06b9bd8fe5308ea530dbf8af97c3b3014edd2c32cab3dcc5",
+    "build/bin/libllama-completion-impl.dylib": "88a3475eda47964292947cef7a1156af0285c1c287122ff53bec5abc6e658ee8",
+    "build/bin/libllama.0.0.10326.dylib": "59e1532c2f020c5d7234d1a2f76bae32714cedca734aafb5658686a62b0d632c",
+    "build/bin/libllama.0.dylib": "59e1532c2f020c5d7234d1a2f76bae32714cedca734aafb5658686a62b0d632c",
+    "build/bin/libllama.dylib": "59e1532c2f020c5d7234d1a2f76bae32714cedca734aafb5658686a62b0d632c"
+  },
+  "hardware": "Apple M5\n34359738368",
+  "model": {
+    "layers": 40,
+    "experts": 256,
+    "top_k": 8,
+    "dense_weight_bytes": 2014669312,
+    "expert_weight_bytes": 19568525312,
+    "active_expert_bytes": 611516416.0,
+    "active_weight_bytes": 2626185728.0,
+    "mean_bundle_bytes": 1910988.8,
+    "data_offset": 10991392,
+    "expert_groups": {
+      "0": [
+        {
+          "name": "blk.0.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 984276992,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.0.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 1169940480,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.0.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 1324154880,
+          "bytes": 150994944
+        }
+      ],
+      "1": [
+        {
+          "name": "blk.1.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 1512588032,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.1.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 1698251520,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.1.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 1852465920,
+          "bytes": 150994944
+        }
+      ],
+      "2": [
+        {
+          "name": "blk.2.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 2040899072,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.2.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 2226562560,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.2.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 2380776960,
+          "bytes": 150994944
+        }
+      ],
+      "3": [
+        {
+          "name": "blk.3.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 2571440384,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.3.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 2757103872,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.3.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 2911318272,
+          "bytes": 150994944
+        }
+      ],
+      "4": [
+        {
+          "name": "blk.4.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 3090182400,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.4.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 3275845888,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.4.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 3430060288,
+          "bytes": 150994944
+        }
+      ],
+      "5": [
+        {
+          "name": "blk.5.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 3618493440,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.5.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 3804156928,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.5.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 3958371328,
+          "bytes": 150994944
+        }
+      ],
+      "6": [
+        {
+          "name": "blk.6.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 4146804480,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.6.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 4332467968,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.6.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 4486682368,
+          "bytes": 150994944
+        }
+      ],
+      "7": [
+        {
+          "name": "blk.7.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 4677345792,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.7.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 4863009280,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.7.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 5017223680,
+          "bytes": 150994944
+        }
+      ],
+      "8": [
+        {
+          "name": "blk.8.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 5196087808,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.8.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 5381751296,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.8.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 5535965696,
+          "bytes": 150994944
+        }
+      ],
+      "9": [
+        {
+          "name": "blk.9.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 5724398848,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.9.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 5910062336,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.9.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 6064276736,
+          "bytes": 150994944
+        }
+      ],
+      "10": [
+        {
+          "name": "blk.10.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 6252709888,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.10.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 6438373376,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.10.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 6592587776,
+          "bytes": 150994944
+        }
+      ],
+      "11": [
+        {
+          "name": "blk.11.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 6783251200,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.11.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 6968914688,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.11.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 7123129088,
+          "bytes": 150994944
+        }
+      ],
+      "12": [
+        {
+          "name": "blk.12.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 7301993216,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.12.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 7487656704,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.12.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 7641871104,
+          "bytes": 150994944
+        }
+      ],
+      "13": [
+        {
+          "name": "blk.13.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 7830304256,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.13.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 8015967744,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.13.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 8170182144,
+          "bytes": 150994944
+        }
+      ],
+      "14": [
+        {
+          "name": "blk.14.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 8358615296,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.14.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 8544278784,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.14.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 8698493184,
+          "bytes": 150994944
+        }
+      ],
+      "15": [
+        {
+          "name": "blk.15.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 8889156608,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.15.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 9074820096,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.15.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 9229034496,
+          "bytes": 150994944
+        }
+      ],
+      "16": [
+        {
+          "name": "blk.16.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 9407898624,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.16.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 9593562112,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.16.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 9747776512,
+          "bytes": 150994944
+        }
+      ],
+      "17": [
+        {
+          "name": "blk.17.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 9936209664,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.17.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 10121873152,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.17.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 10276087552,
+          "bytes": 150994944
+        }
+      ],
+      "18": [
+        {
+          "name": "blk.18.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 10464520704,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.18.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 10650184192,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.18.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 10804398592,
+          "bytes": 150994944
+        }
+      ],
+      "19": [
+        {
+          "name": "blk.19.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 10995062016,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.19.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 11180725504,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.19.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 11334939904,
+          "bytes": 150994944
+        }
+      ],
+      "20": [
+        {
+          "name": "blk.20.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 11513804032,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.20.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 11699467520,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.20.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 11853681920,
+          "bytes": 150994944
+        }
+      ],
+      "21": [
+        {
+          "name": "blk.21.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 12042115072,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.21.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 12227778560,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.21.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 12381992960,
+          "bytes": 150994944
+        }
+      ],
+      "22": [
+        {
+          "name": "blk.22.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 12570426112,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.22.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 12756089600,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.22.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 12910304000,
+          "bytes": 150994944
+        }
+      ],
+      "23": [
+        {
+          "name": "blk.23.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 13100967424,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.23.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 13286630912,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.23.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 13440845312,
+          "bytes": 150994944
+        }
+      ],
+      "24": [
+        {
+          "name": "blk.24.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 13619709440,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.24.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 13805372928,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.24.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 13959587328,
+          "bytes": 150994944
+        }
+      ],
+      "25": [
+        {
+          "name": "blk.25.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 14148020480,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.25.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 14333683968,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.25.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 14487898368,
+          "bytes": 150994944
+        }
+      ],
+      "26": [
+        {
+          "name": "blk.26.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 14676331520,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.26.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 14861995008,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.26.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 15016209408,
+          "bytes": 150994944
+        }
+      ],
+      "27": [
+        {
+          "name": "blk.27.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 15206872832,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.27.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 15392536320,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.27.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 15546750720,
+          "bytes": 150994944
+        }
+      ],
+      "28": [
+        {
+          "name": "blk.28.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 15725614848,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.28.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 15911278336,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.28.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 16065492736,
+          "bytes": 150994944
+        }
+      ],
+      "29": [
+        {
+          "name": "blk.29.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 16253925888,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.29.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 16439589376,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.29.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 16593803776,
+          "bytes": 150994944
+        }
+      ],
+      "30": [
+        {
+          "name": "blk.30.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 16782236928,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.30.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 16967900416,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.30.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 17122114816,
+          "bytes": 150994944
+        }
+      ],
+      "31": [
+        {
+          "name": "blk.31.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 17312778240,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.31.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 17498441728,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.31.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 17652656128,
+          "bytes": 150994944
+        }
+      ],
+      "32": [
+        {
+          "name": "blk.32.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 17831520256,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.32.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 18017183744,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.32.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 18171398144,
+          "bytes": 150994944
+        }
+      ],
+      "33": [
+        {
+          "name": "blk.33.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 18359831296,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.33.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 18545494784,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.33.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 18699709184,
+          "bytes": 150994944
+        }
+      ],
+      "34": [
+        {
+          "name": "blk.34.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 18888142336,
+          "bytes": 220200960
+        },
+        {
+          "name": "blk.34.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 19109457408,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.34.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 19263671808,
+          "bytes": 150994944
+        }
+      ],
+      "35": [
+        {
+          "name": "blk.35.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 19454335232,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.35.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 19639998720,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.35.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 19794213120,
+          "bytes": 150994944
+        }
+      ],
+      "36": [
+        {
+          "name": "blk.36.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 19973077248,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.36.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 20158740736,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.36.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 20312955136,
+          "bytes": 150994944
+        }
+      ],
+      "37": [
+        {
+          "name": "blk.37.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 20501388288,
+          "bytes": 184549376
+        },
+        {
+          "name": "blk.37.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 20687051776,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.37.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 20841266176,
+          "bytes": 150994944
+        }
+      ],
+      "38": [
+        {
+          "name": "blk.38.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 21029699328,
+          "bytes": 220200960
+        },
+        {
+          "name": "blk.38.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 21251014400,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.38.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 21405228800,
+          "bytes": 150994944
+        }
+      ],
+      "39": [
+        {
+          "name": "blk.39.ffn_down_exps.weight",
+          "shape": [
+            512,
+            2048,
+            256
+          ],
+          "offset": 21595892224,
+          "bytes": 220200960
+        },
+        {
+          "name": "blk.39.ffn_gate_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 21817207296,
+          "bytes": 150994944
+        },
+        {
+          "name": "blk.39.ffn_up_exps.weight",
+          "shape": [
+            2048,
+            512,
+            256
+          ],
+          "offset": 21971421696,
+          "bytes": 150994944
+        }
+      ]
+    },
+    "file_bytes": 22663387424
+  },
+  "prompts": {
+    "short": "Explain why the sky is blue in one sentence.",
+    "prefill": "Explain the following design tradeoffs.\nA database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. ",
+    "long": "Summarize the following engineering notes and explain two tradeoffs.\nA database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. A database stores records in pages. A cache can keep frequently used pages in memory, while the remaining pages stay on disk. Measuring both latency and bytes transferred helps identify whether the bottleneck is computation, storage, or synchronization. ",
+    "math": "A shop sells 16 items each day, keeps 3 for testing and donates 4. The remaining items sell for 2 dollars each. What is the daily revenue? Explain your calculation.",
+    "code": "Write a Python function that maintains a fixed-capacity least-recently-used cache. Explain how the get and put operations update the data structure.",
+    "chinese": "请解释为什么缓存命中率更高，不一定意味着程序运行速度更快。分别讨论读取成本、并发和同步开销，并给出一个具体例子。"
+  }
+}

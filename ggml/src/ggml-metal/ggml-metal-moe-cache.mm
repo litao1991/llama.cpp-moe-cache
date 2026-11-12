@@ -6,6 +6,8 @@
 #include "ggml-moe-cache.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -17,9 +19,29 @@
 
 #include <unistd.h>
 
-#import <Metal/Metal.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include <libproc.h>
+#include <sys/resource.h>
+#endif
+#endif
 
-static constexpr size_t GGML_METAL_MOE_STAGING_SIZE = 32 * 1024 * 1024;
+static bool ggml_metal_moe_disk_read_bytes(uint64_t & bytes) {
+#if defined(__APPLE__) && TARGET_OS_OSX
+    rusage_info_v2 info = {};
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V2, (rusage_info_t *) &info) == 0) {
+        bytes = info.ri_diskio_bytesread;
+        return true;
+    }
+#endif
+    (void) bytes;
+    return false;
+}
+
+static uint64_t ggml_metal_moe_elapsed_ns(std::chrono::steady_clock::time_point start) {
+    return (uint64_t) std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+}
 
 static bool ggml_metal_moe_env_enabled(const char * name, bool default_value) {
     const char * value = getenv(name);
@@ -53,7 +75,6 @@ struct ggml_metal_moe_tensor_cache {
     ggml_metal_moe_bundle_cache * bundle = nullptr;
     size_t expert_size = 0;
     size_t bundle_offset = 0;
-    ggml_metal_buffer_id source = { nullptr, 0 };
     ggml_metal_moe_expert_source file_source = { -1, 0, 0, 0 };
     ggml_metal_buffer_t page_table_buffer = nullptr;
     uint64_t * page_table = nullptr;
@@ -70,6 +91,8 @@ struct ggml_metal_moe_bundle_cache {
     uint32_t layer = UINT32_MAX;
     uint32_t n_experts = 0;
     uint32_t part_mask = 0;
+    uint64_t eval_step = UINT64_MAX;
+    std::vector<uint8_t> prefill_top;
     size_t expert_size = 0;
     ggml_metal_buffer_t access_buffer = nullptr;
     uint32_t * access = nullptr;
@@ -81,24 +104,23 @@ struct ggml_metal_moe_cache {
     ggml_metal_moe_cache(ggml_metal_device_t dev, size_t capacity_bytes) :
         dev(dev),
         capacity(capacity_bytes),
-        slots(capacity_bytes, 4096) {
+        slots(capacity_bytes, 4096, std::min(100u, ggml_metal_moe_env_u32("GGML_METAL_MOE_CACHE_PROTECTED_PERCENT", 80))) {
         prefetch_enabled = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_PREFETCH", true);
         adaptive_prefetch = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_ADAPTIVE_PREFETCH", true);
         prefill_markov = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_PREFILL_MARKOV", true);
         bundle_enabled = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_BUNDLE", true);
         dynamic_layer_budget = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_DYNAMIC_LAYER_BUDGET", true);
-        direct_blit = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_DIRECT_BLIT", true);
         remaining_tokens_hint = ggml_metal_moe_env_u32("GGML_METAL_MOE_CACHE_REMAINING_TOKENS", UINT32_MAX);
-        buffer = ggml_metal_buffer_init(dev, capacity_bytes, false);
-        if (!direct_blit) {
-            for (size_t i = 0; i < 2; ++i) {
-                staging[i] = ggml_metal_buffer_init(dev, GGML_METAL_MOE_STAGING_SIZE, true);
-            }
-        }
+        eval_enabled = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_EVAL", false);
+        strict_update = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_STRICT_UPDATE", true);
+        strict_mm = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_MM_ID", true);
+        preload_enabled = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_PRELOAD", true);
+        preload_rebuild = ggml_metal_moe_env_enabled("GGML_METAL_MOE_CACHE_PRELOAD_REBUILD", false);
+        protected_percent = std::min(100u, ggml_metal_moe_env_u32("GGML_METAL_MOE_CACHE_PROTECTED_PERCENT", 80));
+        buffer = ggml_metal_buffer_init(dev, capacity_bytes, true);
     }
 
     ~ggml_metal_moe_cache() {
-        wait_for_copy();
         wasted_prefetches += prefetched.size();
         for (size_t i = 0; i < prefetched.size(); ++i) {
             prefetch_control.record_outcome(false);
@@ -136,13 +158,28 @@ struct ggml_metal_moe_cache {
                 bundles.size(),
                 (unsigned long long) direct_copy_bytes,
                 (unsigned long long) staged_copy_bytes);
+        GGML_LOG_INFO("%s: shared cache, file read bytes = %llu, host copy bytes = %llu, read failures = %llu\n", __func__,
+                (unsigned long long) file_read_bytes,
+                (unsigned long long) host_copy_bytes,
+                (unsigned long long) read_failures);
+        if (eval_enabled) {
+            GGML_LOG_INFO("moe_cache_iteration: require calls = %llu, all hit calls = %llu, wait calls = %llu, wait ns = %llu, gpu ns = %llu, prefill top hits = %llu, prefill early hits = %llu, early required = %llu\n",
+                    (unsigned long long) eval_require_calls, (unsigned long long) eval_all_hit_calls,
+                    (unsigned long long) eval_wait_calls, (unsigned long long) eval_wait_ns,
+                    (unsigned long long) eval_gpu_ns, (unsigned long long) eval_prefill_top_hits,
+                    (unsigned long long) eval_prefill_early_hits, (unsigned long long) eval_early_required);
+            GGML_LOG_INFO("moe_cache_eval: steps = %llu, route calls = %llu, required = %llu, resident hits = %llu, sync bundles = %llu, sync bytes = %llu, decode read bytes = %llu, decode read calls = %llu, decode read ns = %llu, require ns = %llu, require read ns = %llu, disk bytes = %llu, disk available = %u, capacity = %zu\n",
+                    (unsigned long long) eval_steps, (unsigned long long) eval_route_calls,
+                    (unsigned long long) eval_required, (unsigned long long) eval_hits,
+                    (unsigned long long) eval_sync_bundles, (unsigned long long) eval_sync_bytes,
+                    (unsigned long long) eval_read_bytes, (unsigned long long) eval_read_calls,
+                    (unsigned long long) eval_read_ns, (unsigned long long) eval_require_ns,
+                    (unsigned long long) eval_require_read_ns,
+                    (unsigned long long) (eval_disk_end >= eval_disk_start ? eval_disk_end - eval_disk_start : 0),
+                    eval_disk_available ? 1u : 0u, capacity);
+        }
         tensors.clear();
         bundles.clear();
-        for (auto & item : staging) {
-            if (item) {
-                ggml_metal_buffer_free(item);
-            }
-        }
         if (buffer) {
             ggml_metal_buffer_free(buffer);
         }
@@ -161,16 +198,44 @@ struct ggml_metal_moe_cache {
     uint32_t n_layers = 0;
     size_t preloaded_entries = 0;
     size_t preloaded_bytes = 0;
-    ggml_metal_buffer_t staging[2] = { nullptr, nullptr };
-    size_t staging_index = 0;
-    id<MTLCommandBuffer> staging_cmd_buf[2] = { nil, nil };
-    id<MTLCommandBuffer> copy_cmd_buf = nil;
-    id<MTLBlitCommandEncoder> copy_encoder = nil;
-    size_t staged_bytes = 0;
     uint64_t staging_batches = 0;
     uint64_t async_copies = 0;
     uint64_t direct_copy_bytes = 0;
     uint64_t staged_copy_bytes = 0;
+    uint64_t file_read_bytes = 0;
+    uint64_t host_copy_bytes = 0;
+    uint64_t read_failures = 0;
+    bool eval_enabled = false;
+    bool eval_active = false;
+    bool eval_pending = false;
+    bool eval_disk_available = false;
+    uint64_t eval_steps = 0;
+    uint64_t eval_route_calls = 0;
+    uint64_t eval_required = 0;
+    uint64_t eval_hits = 0;
+    uint64_t eval_sync_bundles = 0;
+    uint64_t eval_sync_bytes = 0;
+    uint64_t eval_read_bytes = 0;
+    uint64_t eval_read_calls = 0;
+    uint64_t eval_read_ns = 0;
+    uint64_t eval_require_ns = 0;
+    uint64_t eval_require_read_ns = 0;
+    uint64_t eval_disk_start = 0;
+    uint64_t eval_disk_end = 0;
+    uint64_t eval_require_calls = 0;
+    uint64_t eval_all_hit_calls = 0;
+    uint64_t eval_wait_calls = 0;
+    uint64_t eval_wait_ns = 0;
+    uint64_t eval_gpu_ns = 0;
+    uint64_t eval_prefill_top_hits = 0;
+    uint64_t eval_prefill_early_hits = 0;
+    uint64_t eval_early_required = 0;
+    bool decode_phase = false;
+    bool strict_update = true;
+    bool strict_mm = true;
+    bool preload_enabled = true;
+    bool preload_rebuild = false;
+    uint32_t protected_percent = 80;
     uint64_t synchronous_loads = 0;
     uint64_t synchronous_hits = 0;
     uint64_t predictions = 0;
@@ -188,111 +253,53 @@ struct ggml_metal_moe_cache {
     bool prefill_markov = true;
     bool bundle_enabled = true;
     bool dynamic_layer_budget = true;
-    bool direct_blit = true;
     bool preload_complete = false;
     uint32_t remaining_tokens_hint = UINT32_MAX;
     ggml_moe_prefetch_control prefetch_control;
     std::unordered_set<uint64_t> prefetched;
 
-    bool copy_backlog() const {
-        uint32_t in_flight = 0;
-        for (id<MTLCommandBuffer> item : staging_cmd_buf) {
-            if (item && [item status] < MTLCommandBufferStatusCompleted) {
-                ++in_flight;
-            }
-        }
-        return in_flight == 2 || (in_flight > 0 && staged_bytes >= GGML_METAL_MOE_STAGING_SIZE * 3 / 4);
-    }
-
-    void begin_copy() {
-        if (copy_cmd_buf) {
-            return;
-        }
-        if (staging_cmd_buf[staging_index]) {
-            [staging_cmd_buf[staging_index] waitUntilCompleted];
-            [staging_cmd_buf[staging_index] release];
-            staging_cmd_buf[staging_index] = nil;
-        }
-        copy_cmd_buf = [(id<MTLCommandQueue>) ggml_metal_device_get_queue(dev) commandBuffer];
-        [copy_cmd_buf retain];
-        copy_encoder = [copy_cmd_buf blitCommandEncoder];
-        staged_bytes = 0;
-    }
-
-    void commit_copy() {
-        if (!copy_encoder) {
-            return;
-        }
-        [copy_encoder endEncoding];
-        [copy_cmd_buf commit];
-        staging_cmd_buf[staging_index] = copy_cmd_buf;
-        ++staging_batches;
-        copy_cmd_buf = nil;
-        copy_encoder = nil;
-        staging_index = (staging_index + 1) % 2;
-        staged_bytes = 0;
-    }
-
-    void wait_for_copy() {
-        if (copy_encoder) {
-            commit_copy();
-        }
-        for (auto & item : staging_cmd_buf) {
-            if (item) {
-                [item waitUntilCompleted];
-                [item release];
-                item = nil;
-            }
-        }
-    }
-
-    void copy_part(const ggml_metal_moe_tensor_cache & entry, uint32_t expert, size_t offset) {
-        if (direct_blit && entry.file_source.fd < 0) {
-            begin_copy();
-            const auto dst = ggml_metal_buffer_get_base_id(buffer);
-            [copy_encoder copyFromBuffer:(id<MTLBuffer>) entry.source.metal
-                            sourceOffset:entry.source.offs + expert * entry.expert_size
-                                toBuffer:(id<MTLBuffer>) dst.metal
-                       destinationOffset:dst.offs + offset
-                                    size:entry.expert_size];
-            ++async_copies;
-            direct_copy_bytes += entry.expert_size;
-            return;
+    bool copy_part(const ggml_metal_moe_tensor_cache & entry, uint32_t expert, size_t offset) {
+        GGML_ASSERT(buffer && ggml_metal_buffer_is_shared(buffer));
+        GGML_ASSERT(offset <= capacity && entry.expert_size <= capacity - offset);
+        char * destination = (char *) ggml_metal_buffer_get_base(buffer) + offset;
+        if (entry.file_source.fd < 0) {
+            memcpy(destination, (const char *) entry.tensor->data + expert * entry.expert_size, entry.expert_size);
+            host_copy_bytes += entry.expert_size;
+            return true;
         }
 
         size_t copied = 0;
         while (copied < entry.expert_size) {
-            if (staged_bytes == GGML_METAL_MOE_STAGING_SIZE) {
-                commit_copy();
+            const uint64_t file_offset = entry.file_source.file_offset + (uint64_t) expert * entry.expert_size + copied;
+            const bool measure = eval_enabled && eval_active;
+            const auto started = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+            const ssize_t read_bytes = pread(entry.file_source.fd, destination + copied, entry.expert_size - copied, (off_t) file_offset);
+            if (measure) {
+                eval_read_ns += ggml_metal_moe_elapsed_ns(started);
+                ++eval_read_calls;
+                eval_read_bytes += read_bytes > 0 ? (uint64_t) read_bytes : 0;
             }
-            begin_copy();
-            const size_t chunk = std::min(entry.expert_size - copied, GGML_METAL_MOE_STAGING_SIZE - staged_bytes);
-            void * destination = (char *) ggml_metal_buffer_get_base(staging[staging_index]) + staged_bytes;
-            if (entry.file_source.fd >= 0) {
-                const uint64_t file_offset = entry.file_source.file_offset + (uint64_t) expert * entry.expert_size + copied;
-                const ssize_t read_bytes = pread(entry.file_source.fd, destination, chunk, (off_t) file_offset);
-                GGML_ASSERT(read_bytes == (ssize_t) chunk);
-            } else {
-                memcpy(destination, (const char *) entry.tensor->data + expert * entry.expert_size + copied, chunk);
+            if (read_bytes < 0 && errno == EINTR) {
+                continue;
             }
-            const auto src = ggml_metal_buffer_get_base_id(staging[staging_index]);
-            const auto dst = ggml_metal_buffer_get_base_id(buffer);
-            [copy_encoder copyFromBuffer:(id<MTLBuffer>) src.metal
-                            sourceOffset:src.offs + staged_bytes
-                                toBuffer:(id<MTLBuffer>) dst.metal
-                       destinationOffset:dst.offs + offset + copied
-                                    size:chunk];
-            staged_bytes += chunk;
-            copied += chunk;
-            ++async_copies;
-            staged_copy_bytes += chunk;
+            if (read_bytes <= 0) {
+                ++read_failures;
+                GGML_LOG_ERROR("%s: failed to read expert %u from '%s' at offset %llu\n", __func__, expert, entry.tensor->name, (unsigned long long) file_offset);
+                return false;
+            }
+            copied += (size_t) read_bytes;
+            file_read_bytes += (size_t) read_bytes;
         }
+        return true;
     }
 
-    void copy_expert(const ggml_metal_moe_bundle_cache & bundle, uint32_t expert, size_t offset) {
+    bool copy_expert(const ggml_metal_moe_bundle_cache & bundle, uint32_t expert, size_t offset) {
         for (const auto * member : bundle.members) {
-            copy_part(*member, expert, offset + member->bundle_offset);
+            if (!copy_part(*member, expert, offset + member->bundle_offset)) {
+                return false;
+            }
         }
+        return true;
     }
 
     void set_page_tables(const ggml_metal_moe_bundle_cache & bundle, uint32_t expert, size_t offset) {
@@ -317,7 +324,6 @@ struct ggml_metal_moe_cache {
 
     bool resize(size_t capacity_bytes) {
         std::lock_guard<std::mutex> lock(mutex);
-        wait_for_copy();
         struct resident {
             uint64_t key;
             uint64_t score;
@@ -347,36 +353,24 @@ struct ggml_metal_moe_cache {
             buffer = nullptr;
         }
         capacity = capacity_bytes;
-        slots.reset(capacity_bytes, 4096);
+        slots.reset(capacity_bytes, 4096, protected_percent);
         if (n_layers > 0) {
             slots.set_group_count(n_layers);
         }
         prefetched.clear();
         if (capacity_bytes == 0) {
-            for (auto & item : staging) {
-                if (item) {
-                    ggml_metal_buffer_free(item);
-                    item = nullptr;
-                }
-            }
             return true;
         }
 
-        buffer = ggml_metal_buffer_init(dev, capacity_bytes, false);
-        if (!buffer) {
-            capacity = 0;
-            slots.reset(0, 4096);
-            return false;
-        }
-        if (!direct_blit) {
-            for (auto & item : staging) {
-                if (!item) {
-                    item = ggml_metal_buffer_init(dev, GGML_METAL_MOE_STAGING_SIZE, true);
-                }
-                if (!item || !ggml_metal_buffer_is_shared(item)) {
-                    return false;
-                }
+        buffer = ggml_metal_buffer_init(dev, capacity_bytes, true);
+        if (!buffer || !ggml_metal_buffer_is_shared(buffer)) {
+            if (buffer) {
+                ggml_metal_buffer_free(buffer);
+                buffer = nullptr;
             }
+            capacity = 0;
+            slots.reset(0, 4096, protected_percent);
+            return false;
         }
         for (const auto & resident : residents) {
             const uint32_t bundle_id = (uint32_t) (resident.key >> 32);
@@ -386,11 +380,13 @@ struct ggml_metal_moe_cache {
             if (!result.admitted) {
                 continue;
             }
-            copy_expert(bundle, expert, result.offset);
+            if (!copy_expert(bundle, expert, result.offset)) {
+                slots.erase(resident.key);
+                invalidate(resident.key);
+                return false;
+            }
             set_page_tables(bundle, expert, result.offset);
         }
-        commit_copy();
-        wait_for_copy();
         return true;
     }
 };
@@ -441,6 +437,7 @@ static struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_disabled(void) 
     return {
         false,
         false,
+        false,
         { nullptr, 0 },
         { nullptr, 0 },
         { nullptr, 0 },
@@ -455,11 +452,10 @@ static bool ggml_metal_moe_bundle_has_file_sources(const ggml_metal_moe_bundle_c
 
 ggml_metal_moe_cache_t ggml_metal_moe_cache_init(ggml_metal_device_t dev, size_t capacity_bytes) {
     std::unique_ptr<ggml_metal_moe_cache> cache(new ggml_metal_moe_cache(dev, capacity_bytes));
-    if (!cache->buffer || (!cache->direct_blit &&
-            (!cache->staging[0] || !cache->staging[1] ||
-             !ggml_metal_buffer_is_shared(cache->staging[0]) || !ggml_metal_buffer_is_shared(cache->staging[1])))) {
+    if (!cache->buffer || !ggml_metal_buffer_is_shared(cache->buffer)) {
         return nullptr;
     }
+    GGML_LOG_INFO("%s: shared expert cache = %.2f MiB, file reads write directly to cache slots\n", __func__, capacity_bytes / 1024.0 / 1024.0);
     return cache.release();
 }
 
@@ -485,15 +481,6 @@ bool ggml_metal_moe_cache_set_source(
         if (entry != cache->tensor_map.end()) {
             entry->second->file_source = source;
         }
-        cache->direct_blit = false;
-        for (auto & staging : cache->staging) {
-            if (!staging) {
-                staging = ggml_metal_buffer_init(cache->dev, GGML_METAL_MOE_STAGING_SIZE, true);
-            }
-            if (!staging || !ggml_metal_buffer_is_shared(staging)) {
-                return false;
-            }
-        }
     }
     return ggml_metal_moe_cache_get_bindings(cache, tensor).enabled;
 }
@@ -507,6 +494,27 @@ bool ggml_metal_moe_cache_needs_residency(
     std::lock_guard<std::mutex> lock(cache->mutex);
     const auto entry = cache->tensor_map.find(tensor);
     return entry != cache->tensor_map.end() && ggml_metal_moe_bundle_has_file_sources(*entry->second->bundle);
+}
+
+bool ggml_metal_moe_cache_same_bundle(
+        ggml_metal_moe_cache_t cache,
+        const struct ggml_tensor * first,
+        const struct ggml_tensor * second) {
+    if (!cache || !first || !second) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(cache->mutex);
+    const auto a = cache->tensor_map.find(first);
+    const auto b = cache->tensor_map.find(second);
+    return a != cache->tensor_map.end() && b != cache->tensor_map.end() && a->second->bundle == b->second->bundle;
+}
+
+void ggml_metal_moe_cache_record_wait(ggml_metal_moe_cache_t cache, uint32_t n_tokens, uint64_t ns, uint64_t gpu_ns) {
+    if (cache && cache->eval_enabled && cache->decode_phase && n_tokens == 1) {
+        ++cache->eval_wait_calls;
+        cache->eval_wait_ns += ns;
+        cache->eval_gpu_ns += gpu_ns;
+    }
 }
 
 bool ggml_metal_moe_cache_require(
@@ -529,6 +537,22 @@ bool ggml_metal_moe_cache_require(
         return false;
     }
 
+    const bool measure = cache->eval_enabled && cache->decode_phase && n_tokens == 1;
+    cache->eval_require_calls += measure;
+    const auto started = measure ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (measure && !cache->eval_active) {
+        cache->eval_active = true;
+        cache->eval_disk_available = ggml_metal_moe_disk_read_bytes(cache->eval_disk_start);
+    }
+    const uint64_t read_before = cache->eval_read_ns;
+    const uint64_t bytes_before = cache->file_read_bytes;
+    const bool first_route = measure && bundle.eval_step != cache->eval_steps;
+    if (first_route) {
+        bundle.eval_step = cache->eval_steps;
+        ++cache->eval_route_calls;
+        cache->eval_pending = true;
+    }
+
     std::vector<uint64_t> required;
     for (uint32_t token = 0; token < n_tokens; ++token) {
         const auto * token_ids = (const int32_t *) ((const char *) ids + token * token_stride);
@@ -546,8 +570,19 @@ bool ggml_metal_moe_cache_require(
         return false;
     }
 
+    bool all_hit = true;
     for (uint64_t key : required) {
         const uint32_t expert = (uint32_t) key;
+        if (first_route) {
+            ++cache->eval_required;
+            cache->eval_hits += cache->slots.contains(key);
+            const bool predicted = expert < bundle.prefill_top.size() && bundle.prefill_top[expert];
+            cache->eval_prefill_top_hits += predicted;
+            if (cache->eval_steps < 32) {
+                ++cache->eval_early_required;
+                cache->eval_prefill_early_hits += predicted;
+            }
+        }
         const auto result = cache->slots.require(key, bundle.expert_size, bundle.layer, required);
         for (uint64_t evicted : result.evicted) {
             cache->invalidate(evicted);
@@ -559,12 +594,22 @@ bool ggml_metal_moe_cache_require(
         if (!result.admitted) {
             return false;
         }
-        cache->copy_expert(bundle, expert, result.offset);
+        all_hit = false;
+        if (!cache->copy_expert(bundle, expert, result.offset)) {
+            cache->slots.erase(key);
+            cache->invalidate(key);
+            return false;
+        }
         cache->set_page_tables(bundle, expert, result.offset);
         ++cache->synchronous_loads;
+        cache->eval_sync_bundles += measure;
     }
-    cache->commit_copy();
-    cache->wait_for_copy();
+    if (measure) {
+        cache->eval_all_hit_calls += all_hit;
+        cache->eval_require_ns += ggml_metal_moe_elapsed_ns(started);
+        cache->eval_require_read_ns += cache->eval_read_ns - read_before;
+        cache->eval_sync_bytes += cache->file_read_bytes - bytes_before;
+    }
     return true;
 }
 
@@ -591,6 +636,7 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
         return {
             true,
             ggml_metal_moe_bundle_has_file_sources(*entry->bundle),
+            cache->strict_mm,
             ggml_metal_buffer_get_base_id(cache->buffer),
             ggml_metal_buffer_get_base_id(entry->page_table_buffer),
             ggml_metal_buffer_get_base_id(entry->bundle->access_buffer),
@@ -658,7 +704,6 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
     entry->bundle = bundle;
     entry->expert_size = tensor->nb[2];
     entry->bundle_offset = ggml_metal_moe_align(bundle->expert_size);
-    entry->source = source;
     if (has_file_source) {
         entry->file_source = file_source_it->second;
     }
@@ -693,6 +738,7 @@ struct ggml_metal_moe_cache_bindings ggml_metal_moe_cache_get_bindings(
     return {
         true,
         ggml_metal_moe_bundle_has_file_sources(*raw->bundle),
+        cache->strict_mm,
         ggml_metal_buffer_get_base_id(cache->buffer),
         ggml_metal_buffer_get_base_id(raw->page_table_buffer),
         ggml_metal_buffer_get_base_id(raw->bundle->access_buffer),
@@ -727,7 +773,8 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
             current_experts.push_back(expert);
 
             const uint64_t key = ggml_metal_moe_cache_key(bundle.id, expert);
-            const auto result = cache->slots.access(key, bundle.expert_size, bundle.layer);
+            const bool already_loaded = cache->strict_update && ggml_metal_moe_bundle_has_file_sources(bundle);
+            const auto result = cache->slots.access(key, bundle.expert_size, bundle.layer, !already_loaded);
             if (result.hit && cache->prefetched.erase(key) > 0) {
                 ++cache->useful_prefetches;
                 cache->prefetch_control.record_outcome(true);
@@ -738,8 +785,12 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
             }
 
             if (result.admitted) {
-                cache->copy_expert(bundle, expert, result.offset);
-                cache->set_page_tables(bundle, expert, result.offset);
+                if (cache->copy_expert(bundle, expert, result.offset)) {
+                    cache->set_page_tables(bundle, expert, result.offset);
+                } else {
+                    cache->slots.erase(key);
+                    cache->invalidate(key);
+                }
             }
         }
         for (const auto & predicted : bundle.markov->observe(current_experts)) {
@@ -753,7 +804,6 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
     }
 
     if (!observed_routes) {
-        cache->commit_copy();
         return;
     }
 
@@ -770,10 +820,8 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
     if (!cache->prefetch_enabled) {
         limits = {};
     } else if (cache->adaptive_prefetch) {
-        const bool copy_backlog = cache->copy_backlog();
-        cache->copy_pressure_updates += copy_backlog;
         cache->remaining_stops += remaining_tokens <= 1;
-        limits = cache->prefetch_control.limits(base_prefetch_limit, copy_backlog, demand_evictions, remaining_tokens);
+        limits = cache->prefetch_control.limits(base_prefetch_limit, false, demand_evictions, remaining_tokens);
     }
     if (limits.max_bytes == 0 && !predictions.empty()) {
         ++cache->adaptive_skips;
@@ -799,14 +847,22 @@ void ggml_metal_moe_cache_update(ggml_metal_moe_cache_t cache) {
             cache->invalidate(evicted);
         }
         if (result.admitted) {
-            cache->copy_expert(*prediction.bundle, prediction.expert, result.offset);
+            if (!cache->copy_expert(*prediction.bundle, prediction.expert, result.offset)) {
+                cache->slots.erase(key);
+                cache->invalidate(key);
+                continue;
+            }
             cache->set_page_tables(*prediction.bundle, prediction.expert, result.offset);
             cache->prefetched.insert(key);
             ++cache->prefetch_admissions;
             prefetch_bytes += allocation_size;
         }
     }
-    cache->commit_copy();
+    if (cache->eval_pending) {
+        ++cache->eval_steps;
+        cache->eval_pending = false;
+        cache->eval_disk_available = ggml_metal_moe_disk_read_bytes(cache->eval_disk_end) && cache->eval_disk_available;
+    }
 }
 
 void ggml_metal_moe_cache_attach_profile(
@@ -866,6 +922,35 @@ void ggml_metal_moe_cache_preload(ggml_metal_moe_cache_t cache, ggml_metal_moe_p
     }
     ggml_metal_moe_profile_release_transitions(profile);
 
+    if (cache->eval_enabled && cache->n_layers > 0) {
+        for (auto & bundle : cache->bundles) {
+            bundle->prefill_top.assign(bundle->n_experts, 0);
+            std::vector<ggml_metal_moe_preload_candidate> ranked;
+            for (const auto & candidate : candidates) {
+                if (candidate.bundle == bundle.get()) {
+                    ranked.push_back(candidate);
+                }
+            }
+            std::sort(ranked.begin(), ranked.end(), [](const auto & a, const auto & b) {
+                return a.count != b.count ? a.count > b.count : a.expert < b.expert;
+            });
+            const size_t limit = cache->capacity / cache->n_layers / ggml_metal_moe_align(bundle->expert_size);
+            for (size_t i = 0; i < std::min(limit, ranked.size()); ++i) {
+                bundle->prefill_top[ranked[i].expert] = 1;
+            }
+        }
+    }
+
+    if (cache->preload_enabled && cache->preload_rebuild) {
+        cache->slots.reset(cache->capacity, 4096, cache->protected_percent);
+        cache->prefetched.clear();
+        for (const auto & bundle : cache->bundles) {
+            for (const auto * member : bundle->members) {
+                std::fill(member->page_table, member->page_table + bundle->n_experts, UINT64_MAX);
+            }
+        }
+    }
+
     std::sort(candidates.begin(), candidates.end(), [](const auto & a, const auto & b) {
         const long double a_score = (long double) a.count / a.bundle->expert_size;
         const long double b_score = (long double) b.count / b.bundle->expert_size;
@@ -915,18 +1000,21 @@ void ggml_metal_moe_cache_preload(ggml_metal_moe_cache_t cache, ggml_metal_moe_p
         if (!result.admitted) {
             return;
         }
-        cache->copy_expert(*candidate.bundle, candidate.expert, result.offset);
+        if (!cache->copy_expert(*candidate.bundle, candidate.expert, result.offset)) {
+            cache->slots.erase(key);
+            cache->invalidate(key);
+            return;
+        }
         cache->set_page_tables(*candidate.bundle, candidate.expert, result.offset);
         ++cache->preloaded_entries;
         cache->preloaded_bytes += allocation_size;
     };
 
-    for (const auto & candidate : candidates) {
-        preload(candidate);
+    if (cache->preload_enabled) {
+        for (const auto & candidate : candidates) {
+            preload(candidate);
+        }
     }
-    cache->commit_copy();
-    cache->wait_for_copy();
-
     cache->slots.reset_stats();
     const auto budget_range = std::minmax_element(layer_budgets.begin(), layer_budgets.end());
     const size_t min_budget = layer_budgets.empty() ? 0 : *budget_range.first;
@@ -934,6 +1022,7 @@ void ggml_metal_moe_cache_preload(ggml_metal_moe_cache_t cache, ggml_metal_moe_p
     GGML_LOG_INFO("%s: entries = %zu, bytes = %zu, bundles = %zu, dynamic layer budget = %s, layer budget range = %zu-%zu\n",
             __func__, cache->preloaded_entries, cache->preloaded_bytes, cache->bundles.size(),
             cache->dynamic_layer_budget ? "on" : "off", min_budget, max_budget);
+    cache->decode_phase = true;
 }
 
 ggml_metal_buffer_t ggml_metal_moe_cache_get_buffer(ggml_metal_moe_cache_t cache) {

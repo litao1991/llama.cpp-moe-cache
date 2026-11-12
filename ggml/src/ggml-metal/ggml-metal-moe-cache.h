@@ -25,6 +25,7 @@ struct ggml_metal_moe_cache_result {
 struct ggml_metal_moe_cache_bindings {
     bool enabled;
     bool strict;
+    bool strict_mm;
     struct ggml_metal_buffer_id weights;
     struct ggml_metal_buffer_id page_table;
     struct ggml_metal_buffer_id access;
@@ -32,6 +33,7 @@ struct ggml_metal_moe_cache_bindings {
 
 ggml_metal_moe_cache_t ggml_metal_moe_cache_init(ggml_metal_device_t dev, size_t capacity_bytes);
 void ggml_metal_moe_cache_free(ggml_metal_moe_cache_t cache);
+// Finish GPU reads before changing cache slots or resizing the shared buffer.
 bool ggml_metal_moe_cache_resize(ggml_metal_moe_cache_t cache, size_t capacity_bytes);
 bool ggml_metal_moe_cache_set_source(
         ggml_metal_moe_cache_t cache,
@@ -40,6 +42,11 @@ bool ggml_metal_moe_cache_set_source(
 bool ggml_metal_moe_cache_needs_residency(
         ggml_metal_moe_cache_t cache,
         const struct ggml_tensor * tensor);
+bool ggml_metal_moe_cache_same_bundle(
+        ggml_metal_moe_cache_t cache,
+        const struct ggml_tensor * first,
+        const struct ggml_tensor * second);
+void ggml_metal_moe_cache_record_wait(ggml_metal_moe_cache_t cache, uint32_t n_tokens, uint64_t ns, uint64_t gpu_ns);
 bool ggml_metal_moe_cache_require(
         ggml_metal_moe_cache_t cache,
         const struct ggml_tensor * tensor,

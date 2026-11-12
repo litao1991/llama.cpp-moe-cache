@@ -360,6 +360,34 @@ static void test_required_set_is_not_evicted() {
     assert(cache.contains(5));
 }
 
+static void test_observation_does_not_admit() {
+    ggml_moe_cache_slots cache(8, 1, 80, 1, 0, 0);
+    const std::vector<uint64_t> required = { 1, 2 };
+    assert(cache.require(1, 4, 0, required).admitted);
+    assert(cache.require(2, 4, 0, required).admitted);
+    assert(cache.require(3, 4, 0, { 3 }).admitted);
+    assert(!cache.contains(1));
+    const auto before = cache.stats();
+    const auto missing = cache.access(1, 4, 0, false);
+    assert(!missing.hit && !missing.admitted && missing.evicted.empty());
+    assert(!cache.contains(1));
+    assert(cache.frequency(1) == 1);
+    assert(cache.short_frequency(1) == 1);
+    assert(cache.contains(2) && cache.contains(3));
+    const auto resident = cache.access(2, 4, 0, false);
+    assert(resident.hit && !resident.admitted && resident.evicted.empty());
+    assert(cache.stats().admissions == before.admissions);
+    assert(cache.stats().evictions == before.evictions);
+    assert(cache.stats().accesses == before.accesses + 2);
+    assert(cache.resident_bytes() == 8);
+
+    ggml_moe_cache_policy policy(8, 80, 1, 0, 0);
+    assert(!policy.access(7, 4, 0, false).admitted);
+    assert(!policy.access(7, 4, 0, false).admitted);
+    assert(policy.frequency(7) == 2 && policy.resident_bytes() == 0);
+    assert(policy.access(7, 4, 0).admitted);
+}
+
 static void test_adaptive_prefetch_control() {
     ggml_moe_prefetch_control control;
 
@@ -404,6 +432,7 @@ int main() {
     test_markov_sparse_prefill_seed();
     test_prefetch_does_not_count_as_access();
     test_required_set_is_not_evicted();
+    test_observation_does_not_admit();
     test_adaptive_prefetch_control();
     return 0;
 }

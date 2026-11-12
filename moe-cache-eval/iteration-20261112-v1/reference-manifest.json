@@ -1,0 +1,31 @@
+{
+  "model_path": "/Users/litao/Documents/\u5de5\u5177/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+  "fingerprints": {
+    "build/bin/llama-completion": "71a329c85fbb01fc68cfd03f8b968da81b8cfbf4340fc8201868c573681c0da6",
+    "scripts/moe-cache-iteration-eval.py": "66aea2379f4a3b4a7e3eec7a3e6076e056864eee58829b8c36d635f8246f5457",
+    "scripts/moe-cache-budget-eval.py": "87674728366b33511a67c728b042bb1ab571c357d013d6ffbb1e59095e44a4ac",
+    "build/bin/libggml-base.0.19.0.dylib": "f40abebc0e49bce5f48bddeab8af37d94029fa6bac3e449e8b8384eccb5d5f4d",
+    "build/bin/libggml-base.0.dylib": "f40abebc0e49bce5f48bddeab8af37d94029fa6bac3e449e8b8384eccb5d5f4d",
+    "build/bin/libggml-base.dylib": "f40abebc0e49bce5f48bddeab8af37d94029fa6bac3e449e8b8384eccb5d5f4d",
+    "build/bin/libggml-blas.0.19.0.dylib": "4a92f41508b2cbcdfb77e7687976521c8f4caca8af46a10dd528f3ec54a2ef7d",
+    "build/bin/libggml-blas.0.dylib": "4a92f41508b2cbcdfb77e7687976521c8f4caca8af46a10dd528f3ec54a2ef7d",
+    "build/bin/libggml-blas.dylib": "4a92f41508b2cbcdfb77e7687976521c8f4caca8af46a10dd528f3ec54a2ef7d",
+    "build/bin/libggml-cpu.0.19.0.dylib": "23fd4bcb4d2c58b80385d4190e524ef3ba41b2dd7b3af2e3726ed9244a8af6ab",
+    "build/bin/libggml-cpu.0.dylib": "23fd4bcb4d2c58b80385d4190e524ef3ba41b2dd7b3af2e3726ed9244a8af6ab",
+    "build/bin/libggml-cpu.dylib": "23fd4bcb4d2c58b80385d4190e524ef3ba41b2dd7b3af2e3726ed9244a8af6ab",
+    "build/bin/libggml-metal.0.19.0.dylib": "322541f9a76243c1592c8abdc7ab5050347bfcb0ec373ea9610af3b59c0faca9",
+    "build/bin/libggml-metal.0.dylib": "322541f9a76243c1592c8abdc7ab5050347bfcb0ec373ea9610af3b59c0faca9",
+    "build/bin/libggml-metal.dylib": "322541f9a76243c1592c8abdc7ab5050347bfcb0ec373ea9610af3b59c0faca9",
+    "build/bin/libggml.0.19.0.dylib": "1215acff930c685fab9b2db5c8c10d3813dd27c8ae4d61af2b6a92ad6dcf6bf4",
+    "build/bin/libggml.0.dylib": "1215acff930c685fab9b2db5c8c10d3813dd27c8ae4d61af2b6a92ad6dcf6bf4",
+    "build/bin/libggml.dylib": "1215acff930c685fab9b2db5c8c10d3813dd27c8ae4d61af2b6a92ad6dcf6bf4",
+    "build/bin/libllama-common.0.0.10326.dylib": "8a7aab5ef512f48e06b9bd8fe5308ea530dbf8af97c3b3014edd2c32cab3dcc5",
+    "build/bin/libllama-common.0.dylib": "8a7aab5ef512f48e06b9bd8fe5308ea530dbf8af97c3b3014edd2c32cab3dcc5",
+    "build/bin/libllama-common.dylib": "8a7aab5ef512f48e06b9bd8fe5308ea530dbf8af97c3b3014edd2c32cab3dcc5",
+    "build/bin/libllama-completion-impl.dylib": "88a3475eda47964292947cef7a1156af0285c1c287122ff53bec5abc6e658ee8",
+    "build/bin/libllama.0.0.10326.dylib": "59e1532c2f020c5d7234d1a2f76bae32714cedca734aafb5658686a62b0d632c",
+    "build/bin/libllama.0.dylib": "59e1532c2f020c5d7234d1a2f76bae32714cedca734aafb5658686a62b0d632c",
+    "build/bin/libllama.dylib": "59e1532c2f020c5d7234d1a2f76bae32714cedca734aafb5658686a62b0d632c"
+  },
+  "reference_script_sha256": "a506e2c3e951c524e63fc45ccb08f45281c8fe7a2e71156ec320d1070204220c"
+}

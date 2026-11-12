@@ -65,7 +65,7 @@ public:
     ggml_moe_cache_policy(const ggml_moe_cache_policy &) = delete;
     ggml_moe_cache_policy & operator=(const ggml_moe_cache_policy &) = delete;
 
-    ggml_moe_cache_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX);
+    ggml_moe_cache_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, bool admit_missing = true);
     ggml_moe_cache_result prefetch(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, uint64_t predicted_benefit = UINT64_MAX);
     ggml_moe_cache_result require(uint64_t key, size_t size_bytes, uint32_t group, const std::vector<uint64_t> & protected_keys);
     bool erase(uint64_t key);
@@ -104,14 +104,14 @@ public:
     ggml_moe_cache_slots(const ggml_moe_cache_slots &) = delete;
     ggml_moe_cache_slots & operator=(const ggml_moe_cache_slots &) = delete;
 
-    ggml_moe_cache_slot_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX);
+    ggml_moe_cache_slot_result access(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, bool admit_missing = true);
     ggml_moe_cache_slot_result prefetch(uint64_t key, size_t size_bytes, uint32_t group = UINT32_MAX, uint64_t predicted_benefit = UINT64_MAX);
     ggml_moe_cache_slot_result require(uint64_t key, size_t size_bytes, uint32_t group, const std::vector<uint64_t> & protected_keys);
     bool erase(uint64_t key);
     void set_group_count(uint32_t group_count);
     void set_group_budgets(const std::vector<size_t> & budgets);
     void reset_stats();
-    void reset(size_t capacity_bytes, size_t alignment);
+    void reset(size_t capacity_bytes, size_t alignment, uint32_t protected_percent = 80);
 
     bool contains(uint64_t key) const;
     size_t offset(uint64_t key) const;

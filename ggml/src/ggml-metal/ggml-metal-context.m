@@ -12,6 +12,7 @@
 #import <Foundation/Foundation.h>
 
 #import <Metal/Metal.h>
+#include <time.h>
 
 #undef MIN
 #undef MAX
@@ -41,6 +42,8 @@ struct ggml_metal {
     bool use_fusion;
     bool use_concurrency;
     bool use_graph_optimize;
+    bool moe_layer_residency;
+    bool moe_eval;
 
     int debug_graph;
     int debug_fusion;
@@ -140,6 +143,10 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
     res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
     res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
+    const char * layer_residency = getenv("GGML_METAL_MOE_CACHE_LAYER_RESIDENCY");
+    res->moe_layer_residency = !layer_residency || strcmp(layer_residency, "0") != 0;
+    const char * moe_eval = getenv("GGML_METAL_MOE_CACHE_EVAL");
+    res->moe_eval = moe_eval && strcmp(moe_eval, "0") != 0;
 
     {
         const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
@@ -561,11 +568,13 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
     @autoreleasepool {
         bool strict_moe = false;
+        uint32_t strict_tokens = 0;
         if (ctx->moe_cache) {
             for (int i = 0; i < gf->n_nodes; ++i) {
                 const struct ggml_tensor * node = gf->nodes[i];
                 if (node->op == GGML_OP_MUL_MAT_ID && ggml_metal_moe_cache_needs_residency(ctx->moe_cache, node->src[0])) {
                     strict_moe = true;
+                    strict_tokens = (uint32_t) node->src[2]->ne[1];
                     break;
                 }
             }
@@ -573,11 +582,15 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
         if (strict_moe) {
             id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
             int start = 0;
+            const struct ggml_tensor * resident_tensor = NULL;
+            const struct ggml_tensor * resident_ids = NULL;
             while (start < gf->n_nodes) {
                 int end = start;
                 while (end < gf->n_nodes) {
                     const struct ggml_tensor * node = gf->nodes[end];
-                    if (node->op == GGML_OP_MUL_MAT_ID && ggml_metal_moe_cache_needs_residency(ctx->moe_cache, node->src[0])) {
+                    if (node->op == GGML_OP_MUL_MAT_ID && ggml_metal_moe_cache_needs_residency(ctx->moe_cache, node->src[0]) &&
+                            (!ctx->moe_layer_residency || !resident_tensor || resident_ids != node->src[2] ||
+                             !ggml_metal_moe_cache_same_bundle(ctx->moe_cache, resident_tensor, node->src[0]))) {
                         break;
                     }
                     ++end;
@@ -598,7 +611,17 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                     }
                     ggml_metal_op_free(op_ctx);
                     [cmd_buf commit];
+                    struct timespec before = { 0, 0 }, after = { 0, 0 };
+                    if (ctx->moe_eval && strict_tokens == 1) {
+                        clock_gettime(CLOCK_MONOTONIC, &before);
+                    }
                     [cmd_buf waitUntilCompleted];
+                    if (ctx->moe_eval && strict_tokens == 1) {
+                        clock_gettime(CLOCK_MONOTONIC, &after);
+                        ggml_metal_moe_cache_record_wait(ctx->moe_cache, strict_tokens,
+                                (uint64_t) (after.tv_sec - before.tv_sec) * 1000000000 + after.tv_nsec - before.tv_nsec,
+                                (uint64_t) (([cmd_buf GPUEndTime] - [cmd_buf GPUStartTime]) * 1000000000));
+                    }
                     if ([cmd_buf status] != MTLCommandBufferStatusCompleted) {
                         return GGML_STATUS_FAILED;
                     }
@@ -608,6 +631,8 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                     break;
                 }
                 struct ggml_tensor * node = gf->nodes[end];
+                resident_tensor = NULL;
+                resident_ids = NULL;
                 ggml_backend_buffer_t ids_backend_buffer = node->src[2]->view_src ? node->src[2]->view_src->buffer : node->src[2]->buffer;
                 ggml_metal_buffer_t ids_buffer = ids_backend_buffer ? ids_backend_buffer->context : NULL;
                 if (!ids_buffer || !ggml_metal_buffer_is_shared(ids_buffer) ||
@@ -622,6 +647,13 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                     return GGML_STATUS_FAILED;
                 }
 
+                if (ctx->moe_layer_residency) {
+                    resident_tensor = node->src[0];
+                    resident_ids = node->src[2];
+                    start = end;
+                    continue;
+                }
+
                 id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
                 ggml_metal_op_t op_ctx = ggml_metal_op_init(
                         ctx->dev, cmd_buf, ctx->moe_cache, ctx->moe_profile, gf,
@@ -632,7 +664,17 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                 }
                 ggml_metal_op_free(op_ctx);
                 [cmd_buf commit];
+                struct timespec before = { 0, 0 }, after = { 0, 0 };
+                if (ctx->moe_eval && strict_tokens == 1) {
+                    clock_gettime(CLOCK_MONOTONIC, &before);
+                }
                 [cmd_buf waitUntilCompleted];
+                if (ctx->moe_eval && strict_tokens == 1) {
+                    clock_gettime(CLOCK_MONOTONIC, &after);
+                    ggml_metal_moe_cache_record_wait(ctx->moe_cache, strict_tokens,
+                            (uint64_t) (after.tv_sec - before.tv_sec) * 1000000000 + after.tv_nsec - before.tv_nsec,
+                            (uint64_t) (([cmd_buf GPUEndTime] - [cmd_buf GPUStartTime]) * 1000000000));
+                }
                 if ([cmd_buf status] != MTLCommandBufferStatusCompleted) {
                     return GGML_STATUS_FAILED;
                 }

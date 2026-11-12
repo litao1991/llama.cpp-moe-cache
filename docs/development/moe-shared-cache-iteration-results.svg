@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="660" viewBox="0 0 920 660">
+  <rect width="920" height="660" fill="#f8fafc"/>
+  <g font-family="Arial, sans-serif" fill="#0f172a">
+    <text x="460" y="30" text-anchor="middle" font-size="21" font-weight="bold">M5 shared-cache iteration: measured decode throughput</text>
+    <text x="460" y="54" text-anchor="middle" font-size="13">Qwen3.6-35B-A3B Q4_K_M, 11-token input, 128-token output; mean and sample SD</text>
+    <text x="64" y="82" font-size="16" font-weight="bold">A. Same-phase feature ablation (3 runs per configuration)</text>
+    <g stroke="#e2e8f0" stroke-width="1">
+      <path d="M64 275H865 M64 225H865 M64 175H865 M64 125H865"/>
+    </g>
+    <g font-size="12" text-anchor="end">
+      <text x="55" y="279">0</text><text x="55" y="229">5</text><text x="55" y="179">10</text><text x="55" y="129">15</text>
+    </g>
+    <text x="14" y="197" font-size="12" transform="rotate(-90 14 197)">tok/s</text>
+    <rect x="128" y="196.3" width="62" height="78.7" fill="#94a3b8"/>
+    <rect x="206" y="180.8" width="62" height="94.2" fill="#38bdf8"/>
+    <rect x="284" y="135.5" width="62" height="139.5" fill="#0f766e"/>
+    <rect x="540" y="167.3" width="62" height="107.7" fill="#94a3b8"/>
+    <rect x="618" y="163.7" width="62" height="111.3" fill="#38bdf8"/>
+    <rect x="696" y="108.2" width="62" height="166.8" fill="#0f766e"/>
+    <g stroke="#0f172a" stroke-width="1.5">
+      <path d="M159 195.5v1.6 M154 195.5h10 M154 197.1h10"/>
+      <path d="M237 172.8v16 M232 172.8h10 M232 188.8h10"/>
+      <path d="M315 134.8v1.4 M310 134.8h10 M310 136.2h10"/>
+      <path d="M571 166.9v0.8 M566 166.9h10 M566 167.7h10"/>
+      <path d="M649 163.5v0.4 M644 163.5h10 M644 163.9h10"/>
+      <path d="M727 107.8v0.8 M722 107.8h10 M722 108.6h10"/>
+    </g>
+    <g font-size="13" text-anchor="middle">
+      <text x="159" y="186">7.87</text><text x="237" y="163">9.42</text><text x="315" y="126">13.95</text>
+      <text x="571" y="157">10.77</text><text x="649" y="153">11.13</text><text x="727" y="98">16.68</text>
+      <text x="237" y="296">256 MiB</text><text x="649" y="296">1024 MiB</text>
+    </g>
+    <rect x="172" y="312" width="13" height="13" fill="#94a3b8"/>
+    <text x="192" y="323" font-size="13">Original shared P0</text>
+    <rect x="360" y="312" width="13" height="13" fill="#38bdf8"/>
+    <text x="380" y="323" font-size="13">No update reload</text>
+    <rect x="554" y="312" width="13" height="13" fill="#0f766e"/>
+    <text x="574" y="323" font-size="13">Plus per-layer residency</text>
+    <text x="64" y="369" font-size="16" font-weight="bold">B. Final combination, prediction prefetch OFF (2 runs per budget)</text>
+    <g stroke="#e2e8f0" stroke-width="1">
+      <path d="M64 570H865 M64 530H865 M64 490H865 M64 450H865 M64 410H865"/>
+    </g>
+    <g font-size="12" text-anchor="end">
+      <text x="55" y="574">0</text><text x="55" y="534">5</text><text x="55" y="494">10</text><text x="55" y="454">15</text><text x="55" y="414">20</text>
+    </g>
+    <text x="14" y="502" font-size="12" transform="rotate(-90 14 502)">tok/s</text>
+    <g fill="#0f766e">
+      <rect x="104" y="468.72" width="72" height="101.28"/>
+      <rect x="234" y="466.20" width="72" height="103.80"/>
+      <rect x="364" y="449.96" width="72" height="120.04"/>
+      <rect x="494" y="435.88" width="72" height="134.12"/>
+      <rect x="624" y="440.08" width="72" height="129.92"/>
+      <rect x="754" y="450.00" width="72" height="120.00"/>
+    </g>
+    <g stroke="#0f172a" stroke-width="1.5">
+      <path d="M140 468.16v1.12 M135 468.16h10 M135 469.28h10"/>
+      <path d="M270 458.36v15.68 M265 458.36h10 M265 474.04h10"/>
+      <path d="M400 447.08v5.76 M395 447.08h10 M395 452.84h10"/>
+      <path d="M530 432.44v6.88 M525 432.44h10 M525 439.32h10"/>
+      <path d="M660 439.20v1.76 M655 439.20h10 M655 440.96h10"/>
+      <path d="M790 446.24v7.52 M785 446.24h10 M785 453.76h10"/>
+    </g>
+    <g font-size="13" text-anchor="middle">
+      <text x="140" y="458">12.66</text><text x="270" y="449">12.98</text><text x="400" y="437">15.00</text>
+      <text x="530" y="422">16.77</text><text x="660" y="429">16.24</text><text x="790" y="436">15.00</text>
+      <text x="140" y="591">256</text><text x="270" y="591">512</text><text x="400" y="591">1024</text>
+      <text x="530" y="591">2048</text><text x="660" y="591">4096</text><text x="790" y="591">6144</text>
+    </g>
+    <text x="460" y="615" text-anchor="middle" font-size="13">Expert-cache capacity (MiB), not a process or OS page-cache limit</text>
+    <text x="460" y="641" text-anchor="middle" font-size="12" fill="#475569">Panels are separate phases with different OS cache states; compare features within panel A.</text>
+  </g>
+</svg>

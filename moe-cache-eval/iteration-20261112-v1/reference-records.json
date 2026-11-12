@@ -1,0 +1,74 @@
+[
+  {
+    "stem": "reference-short-1",
+    "prompt": "short",
+    "tokens": 128,
+    "decode_ms": 3723.49,
+    "steps": 127,
+    "decode_tps": 34.11,
+    "output_sha256": "591eeb54068cacbec66dc96d335cd0fc2db89cb8aec738b5ea9a49453d069879",
+    "matches_shared_mm": true,
+    "footprint_mib": 318.67213439941406,
+    "rss_mib": 16473.703125
+  },
+  {
+    "stem": "reference-short-2",
+    "prompt": "short",
+    "tokens": 128,
+    "decode_ms": 3662.1,
+    "steps": 127,
+    "decode_tps": 34.68,
+    "output_sha256": "591eeb54068cacbec66dc96d335cd0fc2db89cb8aec738b5ea9a49453d069879",
+    "matches_shared_mm": true,
+    "footprint_mib": 318.54715728759766,
+    "rss_mib": 21300.90625
+  },
+  {
+    "stem": "reference-short-3",
+    "prompt": "short",
+    "tokens": 128,
+    "decode_ms": 3659.08,
+    "steps": 127,
+    "decode_tps": 34.71,
+    "output_sha256": "591eeb54068cacbec66dc96d335cd0fc2db89cb8aec738b5ea9a49453d069879",
+    "matches_shared_mm": true,
+    "footprint_mib": 318.68780517578125,
+    "rss_mib": 21741.4375
+  },
+  {
+    "stem": "reference-prefill-4",
+    "prompt": "prefill",
+    "tokens": 64,
+    "decode_ms": 1835.32,
+    "steps": 63,
+    "decode_tps": 34.33,
+    "output_sha256": "5c58c179e62f600504e9c7ae7678f874cf4aa1983f0d458cfcb72fba100a3d8b",
+    "matches_shared_mm": true,
+    "footprint_mib": 320.70343017578125,
+    "rss_mib": 21741.484375
+  },
+  {
+    "stem": "reference-long-5",
+    "prompt": "long",
+    "tokens": 128,
+    "decode_ms": 3704.3,
+    "steps": 127,
+    "decode_tps": 34.28,
+    "output_sha256": "50a197ed7b79e6c7a21c6af381a42b76209fdbe52df4e44432940b5a55e1c70b",
+    "matches_shared_mm": true,
+    "footprint_mib": 321.06280517578125,
+    "rss_mib": 21740.703125
+  },
+  {
+    "stem": "reference-math-6",
+    "prompt": "math",
+    "tokens": 64,
+    "decode_ms": 1832.04,
+    "steps": 63,
+    "decode_tps": 34.39,
+    "output_sha256": "b6f67a68d5c6b2c14dd1542e9ad6604803430bac5c207af9a3ef8a117e129c64",
+    "matches_shared_mm": true,
+    "footprint_mib": 319.90655517578125,
+    "rss_mib": 21737.140625
+  }
+]

@@ -455,7 +455,7 @@ ggml_moe_cache_policy::ggml_moe_cache_policy(
 
 ggml_moe_cache_policy::~ggml_moe_cache_policy() = default;
 
-ggml_moe_cache_result ggml_moe_cache_policy::access(uint64_t key, size_t size_bytes, uint32_t group) {
+ggml_moe_cache_result ggml_moe_cache_policy::access(uint64_t key, size_t size_bytes, uint32_t group, bool admit_missing) {
     ggml_moe_cache_result result;
     ++pimpl->clock;
     ++pimpl->stats.accesses;
@@ -477,7 +477,7 @@ ggml_moe_cache_result ggml_moe_cache_policy::access(uint64_t key, size_t size_by
     }
 
     ++pimpl->stats.misses;
-    if (size_bytes == 0 || size_bytes > pimpl->capacity ||
+    if (!admit_missing || size_bytes == 0 || size_bytes > pimpl->capacity ||
             std::max(history.short_frequency, history.long_frequency) < pimpl->admission_threshold) {
         return result;
     }
@@ -770,9 +770,9 @@ ggml_moe_cache_slots::ggml_moe_cache_slots(
 
 ggml_moe_cache_slots::~ggml_moe_cache_slots() = default;
 
-ggml_moe_cache_slot_result ggml_moe_cache_slots::access(uint64_t key, size_t size_bytes, uint32_t group) {
+ggml_moe_cache_slot_result ggml_moe_cache_slots::access(uint64_t key, size_t size_bytes, uint32_t group, bool admit_missing) {
     const size_t allocation_size = pimpl->aligned_size(size_bytes);
-    auto policy_result = pimpl->policy.access(key, allocation_size, group);
+    auto policy_result = pimpl->policy.access(key, allocation_size, group, admit_missing);
     ++pimpl->stats.accesses;
     if (policy_result.hit) {
         ++pimpl->stats.hits;
@@ -848,8 +848,8 @@ void ggml_moe_cache_slots::reset_stats() {
     pimpl->stats = {};
 }
 
-void ggml_moe_cache_slots::reset(size_t capacity_bytes, size_t alignment) {
-    pimpl.reset(new impl(capacity_bytes, alignment, 80, 2, 4096, 256));
+void ggml_moe_cache_slots::reset(size_t capacity_bytes, size_t alignment, uint32_t protected_percent) {
+    pimpl.reset(new impl(capacity_bytes, alignment, protected_percent, 2, 4096, 256));
 }
 
 bool ggml_moe_cache_slots::erase(uint64_t key) {

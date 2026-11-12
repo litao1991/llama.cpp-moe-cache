@@ -10532,6 +10532,8 @@ kernel void kernel_mul_mm_id(
         device const char * htpe,
         device const char * hids,
         device       char * dst,
+        device const uint64_t * moe_page_table,
+        device atomic_uint * moe_access,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiitg[[thread_index_in_threadgroup]],
@@ -10582,7 +10584,16 @@ kernel void kernel_mul_mm_id(
     const short i12 = (id / args.ne20);
     const short i13 = 0;
 
-    const uint64_t offset0 = im*args.nb02 + i13*args.nb03;
+    uint64_t offset0 = im*args.nb02 + i13*args.nb03;
+    if (args.moe_strict) {
+        offset0 = moe_page_table[im];
+        if (offset0 == ~uint64_t(0)) {
+            return;
+        }
+        if (r0 == 0 && r1 == 0 && tiitg == 0) {
+            atomic_store_explicit(moe_access + im, 1, memory_order_relaxed);
+        }
+    }
     const short    offset1 = il0/nl;
 
     device const block_q * x = (device const block_q *)(src0 + args.nb01*(r0 + lr0) + offset0) + offset1;

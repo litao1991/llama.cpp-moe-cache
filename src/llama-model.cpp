@@ -1563,6 +1563,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         for (const auto & item : ml.weights_map) {
             const auto & weight = item.second;
             if (llama_model_loader_is_moe_expert(item.first)) {
+                const ggml_tensor * tensor = get_tensor(item.first.c_str());
+                if (!tensor) {
+                    continue; // optional MTP tensors can be skipped by the loader
+                }
                 int & fd = source_fds[weight.idx];
                 if (fd < 0) {
 #if defined(_WIN32)
@@ -1574,8 +1578,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                         pimpl->moe_source_fds.push_back(fd);
                     }
                 }
-                const ggml_tensor * tensor = get_tensor(item.first.c_str());
-                if (!tensor || fd < 0) {
+                if (fd < 0) {
                     throw std::runtime_error(format("failed to retain MoE expert source for %s", item.first.c_str()));
                 }
                 pimpl->moe_sources.push_back({
